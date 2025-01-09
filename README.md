@@ -82,7 +82,6 @@ Create a `.env` file with the following variables:
 ```
 OPENAI_API_KEY=your_openai_api_key
 NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_api_key
-BLOB_READ_WRITE_TOKEN=your_vercel_blob_token
 NODE_ENV=development
 DEBUG=true
 ```
