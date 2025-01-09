@@ -23,8 +23,7 @@ A modern web application for analyzing network packet capture (PCAP) files with 
 ### Backend
 - **Server**: Next.js API Routes
 - **Packet Analysis**: Wireshark/tshark, Python
-- **AI Integration**: OpenAI API or Google Gemini API
-- **Storage**: Vercel Blob Storage (Better LOCAL)
+- **AI Integration**: OpenAI API or Google Gemini API (Google offers a free tier for the Gemini API, allowing developers to test and explore its capabilities without incurring costs)
 
 ## Prerequisites
 
