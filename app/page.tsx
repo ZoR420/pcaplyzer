@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Button } from "@/app/components/ui/button"
 import { Card } from "@/app/components/ui/card"
 import { ScrollArea } from "@/app/components/ui/scroll-area"
@@ -35,8 +35,10 @@ const NetworkGraphNoSSR = dynamic(
 )
 
 interface ChatMessage {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant';
   content: string;
+  timestamp: string;
+  id: string;
 }
 
 interface DNSQuery {
@@ -574,6 +576,8 @@ export default function PCAPAnalyzer() {
   const [conversationPage, setConversationPage] = useState(0);
   const conversationPerPage = 20;  // Changed from 10 to 20
 
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
+
   const handlePrevious = () => {
     setCurrentPage(prev => Math.max(0, prev - 1));
   };
@@ -799,13 +803,48 @@ export default function PCAPAnalyzer() {
     setTimeout(() => setSuccess(null), 5000)
   }
 
+  const handleSaveChat = async (messageId: string) => {
+    try {
+      const chatToSave = messages.slice(0, messages.findIndex(m => m.id === messageId) + 1);
+      
+      // Create markdown content
+      const markdownContent = `# PCAP Analysis Chat - ${new Date().toLocaleDateString()}
+
+${chatToSave.map(message => {
+  const timestamp = new Date(message.timestamp).toLocaleString();
+  const role = message.role === 'user' ? '👤 User' : '🤖 Assistant';
+  return `## ${role} - ${timestamp}\n\n${message.content}\n`;
+}).join('\n---\n\n')}
+`;
+      
+      // Create and download markdown file
+      const blob = new Blob([markdownContent], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pcap-analysis-chat-${new Date().toISOString().split('T')[0]}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      // Show success message
+      setSuccess('Chat saved successfully');
+    } catch (err) {
+      console.error('Error saving chat:', err);
+      setError('Failed to save chat');
+    }
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || !file || !analysisResults) return;
 
     const newMessage: ChatMessage = {
       role: 'user',
-      content: inputMessage.trim()
+      content: inputMessage.trim(),
+      timestamp: new Date().toISOString(),
+      id: crypto.randomUUID()
     };
 
     setMessages(prev => [...prev, newMessage]);
@@ -862,7 +901,9 @@ export default function PCAPAnalyzer() {
 
       const assistantMessage: ChatMessage = {
         role: 'assistant',
-        content: text
+        content: text,
+        timestamp: new Date().toISOString(),
+        id: crypto.randomUUID()
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -5720,6 +5761,24 @@ export default function PCAPAnalyzer() {
     ));
   };
 
+  // Add useEffect for auto-scrolling
+  useEffect(() => {
+    if (scrollAreaRef.current) {
+      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]')
+      if (scrollContainer) {
+        const smoothScroll = () => {
+          scrollContainer.scrollTo({
+            top: scrollContainer.scrollHeight,
+            behavior: 'smooth'
+          });
+        };
+        smoothScroll();
+        // Ensure scroll happens after content is rendered
+        setTimeout(smoothScroll, 100);
+      }
+    }
+  }, [messages, isLoading]);
+
   return (
     <div className="flex h-screen">
       {/* Left Sidebar with Functions */}
@@ -5748,24 +5807,45 @@ export default function PCAPAnalyzer() {
         </Card>
 
         {/* Chat Section */}
-        <Card className="p-4 flex-1 flex flex-col h-0"> {/* Add h-0 to allow flex-1 to work properly */}
+        <Card className="p-4 flex-1 flex flex-col h-0">
           <h2 className="text-lg font-semibold mb-4">Chat Assistant</h2>
-          <div className="flex-1 overflow-hidden flex flex-col"> {/* Add overflow container */}
-            <ScrollArea className="flex-1 pr-4 overflow-y-auto"> {/* Ensure vertical scroll */}
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <ScrollArea ref={scrollAreaRef} className="flex-1 pr-4 overflow-y-auto">
               <div className="space-y-4">
                 {messages.map((message, index) => (
                   <div
-                    key={index}
+                    key={message.id}
                     className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
-                    <div
-                      className={`max-w-[80%] rounded-lg p-3 ${
-                        message.role === 'user'
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-gray-100 text-gray-900'
-                      }`}
-                    >
-                      {message.content}
+                    <div className="flex flex-col max-w-[80%]">
+                      <div
+                        className={`rounded-lg p-3 ${
+                          message.role === 'user'
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-gray-100 text-gray-900'
+                        }`}
+                      >
+                        {message.content}
+                        {message.role === 'assistant' && (
+                          <div className="mt-2 pt-2 border-t border-gray-200">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleSaveChat(message.id)}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Save conversation up to this point
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                      <span 
+                        className={`text-xs mt-1 ${
+                          message.role === 'user' ? 'text-right' : 'text-left'
+                        } text-gray-500`}
+                      >
+                        {new Date(message.timestamp).toLocaleTimeString()}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -5779,7 +5859,7 @@ export default function PCAPAnalyzer() {
               </div>
             </ScrollArea>
           </div>
-          <form onSubmit={handleSendMessage} className="flex gap-2 mt-4"> {/* Add mt-4 for spacing */}
+          <form onSubmit={handleSendMessage} className="flex gap-2 mt-4">
             <input
               type="text"
               value={inputMessage}
@@ -5788,7 +5868,11 @@ export default function PCAPAnalyzer() {
               className="flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               disabled={isLoading || !file}
             />
-            <Button type="submit" disabled={isLoading || !inputMessage.trim() || !file}>
+            <Button 
+              type="submit" 
+              disabled={isLoading || !inputMessage.trim() || !file}
+              className="transition-all duration-200 hover:bg-blue-600"
+            >
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
             </Button>
           </form>

@@ -9,6 +9,7 @@ A modern web application for analyzing network packet capture (PCAP) files with 
 - 📁 Drag-and-drop PCAP file upload
 - 🔍 Detailed packet inspection and analysis
 - 📈 Network graph visualization
+- 📝 Save chat conversations in `.md` format for improved readability and compatibility with Markdown-supported tools.
 
 ## Tech Stack
 
