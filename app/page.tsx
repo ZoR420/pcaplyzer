@@ -5783,7 +5783,7 @@ ${chatToSave.map(message => {
     <div className="flex h-screen">
       {/* Left Sidebar with Functions */}
       <div className="w-1/4 min-w-[300px] border-r p-4 bg-gray-50 flex flex-col">
-        <h1 className="text-2xl font-bold mb-4 text-center">Pcaplyzer</h1>
+        <h1 className="text-2xl font-bold mb-4 text-center">PcapLyzer</h1>
         <Card className="p-4 mb-4">
           <FileUpload 
             onFileUpload={handleFileUpload}
@@ -5898,7 +5898,7 @@ ${chatToSave.map(message => {
 
           {!file ? (
             <div className="text-center text-gray-500 mt-20">
-              <h2 className="text-3xl font-semibold mb-4 tracking-wide">Welcome to Pcaplyzer</h2>
+              <h2 className="text-3xl font-semibold mb-4 tracking-wide">Welcome to PcapLyzer</h2>
               <p className="text-xl">Upload your PCAP file and let the magic of packet analysis begin!</p>
             </div>
           ) : (
