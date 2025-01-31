@@ -2,7 +2,7 @@
 
 A modern web application for analyzing network packet capture (PCAP) files with AI-powered insights and interactive network visualization.
 
-![alt text](home.png)
+![alt text](home.jpg)
 
 ## Features
 
