@@ -3,6 +3,7 @@ import { exec } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs'
+import { enforceApiGuard } from '@/lib/api-guard'
 
 const execAsync = promisify(exec)
 
@@ -75,6 +76,17 @@ function analyzeFileBasic(filePath: string) {
 
 export async function POST(request: Request) {
   try {
+    const guard = enforceApiGuard(request.headers)
+    if (!guard.ok) {
+      return NextResponse.json(
+        { error: guard.message },
+        {
+          status: guard.status || 429,
+          headers: guard.headers
+        }
+      )
+    }
+
     const { fileName } = await request.json()
     console.log('Analyze request received for file:', fileName)
     

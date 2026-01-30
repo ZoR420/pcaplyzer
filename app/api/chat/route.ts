@@ -4,6 +4,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import { spawn } from 'child_process'
 import path from 'path'
 import fs from 'fs'
+import { enforceApiGuard } from '@/lib/api-guard'
 
 const openAiApiKey = process.env.OPENAI_API_KEY
 const geminiApiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
@@ -152,6 +153,17 @@ Please provide a clear and concise answer based on the PCAP analysis data above.
 
 export async function POST(req: Request) {
   try {
+    const guard = enforceApiGuard(req.headers)
+    if (!guard.ok) {
+      return NextResponse.json(
+        { error: guard.message },
+        {
+          status: guard.status || 429,
+          headers: guard.headers
+        }
+      )
+    }
+
     const body = await req.json()
     const { message, fileName } = body
 

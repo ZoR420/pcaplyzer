@@ -1,17 +1,59 @@
 import { NextResponse } from 'next/server'
-import { writeFile, mkdir } from 'fs/promises'
+import { writeFile, mkdir, readdir, stat, unlink } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { enforceApiGuard } from '@/lib/api-guard'
 
 // Configure the API route for large file uploads
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 // Set maximum file size to 100MB
 export const maxDuration = 60
+
+const uploadTtlHours = Number(process.env.UPLOAD_TTL_HOURS || 0)
+
+async function cleanupOldUploads(uploadDir: string) {
+  if (!uploadTtlHours || uploadTtlHours <= 0) return
+
+  const cutoff = Date.now() - uploadTtlHours * 60 * 60 * 1000
+  try {
+    const files = await readdir(uploadDir)
+    await Promise.all(
+      files.map(async (file) => {
+        const filePath = join(uploadDir, file)
+        try {
+          const stats = await stat(filePath)
+          if (stats.mtimeMs < cutoff) {
+            await unlink(filePath)
+          }
+        } catch (error) {
+          console.warn('Failed to cleanup file:', filePath, error)
+        }
+      })
+    )
+  } catch (error) {
+    console.warn('Failed to cleanup uploads directory:', error)
+  }
+}
+
 // https://nextjs.org/docs/app/api-reference/file-conventions/route-segment-config
 export async function POST(request: Request) {
   console.log('Upload endpoint hit')
   
+  const guard = enforceApiGuard(request.headers)
+  if (!guard.ok) {
+    return new NextResponse(
+      JSON.stringify({ error: guard.message }),
+      {
+        status: guard.status || 429,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(guard.headers || {})
+        }
+      }
+    )
+  }
+
   try {
     // Ensure the request is multipart/form-data
     const contentType = request.headers.get('content-type')
@@ -90,6 +132,7 @@ export async function POST(request: Request) {
     try {
       await writeFile(filePath, buffer)
       console.log('File saved successfully')
+      await cleanupOldUploads(uploadDir)
       return new NextResponse(
         JSON.stringify({ 
           success: true, 

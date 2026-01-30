@@ -426,6 +426,7 @@ export default function PCAPAnalyzer() {
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [healthWarnings, setHealthWarnings] = useState<string[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -679,6 +680,40 @@ export default function PCAPAnalyzer() {
     }
   }, [success])
 
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const response = await fetch('/api/health')
+        if (!response.ok) return
+        const data = await response.json()
+        if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+          setHealthWarnings(data.warnings)
+        }
+      } catch (err) {
+        console.warn('Health check failed:', err)
+      }
+    }
+
+    checkHealth()
+  }, [])
+
+  const formatUserError = (message: string) => {
+    if (!message) return 'An unknown error occurred'
+    if (message.toLowerCase().includes('tshark')) {
+      return `${message} (Install: sudo apt-get install tshark)`
+    }
+    if (message.toLowerCase().includes('python')) {
+      return `${message} (Install: sudo apt-get install python3)`
+    }
+    if (message.toLowerCase().includes('unauthorized')) {
+      return `${message} (Provide X-API-Key or Authorization: Bearer token)`
+    }
+    if (message.toLowerCase().includes('rate limit')) {
+      return `${message} (Try again in a moment)`
+    }
+    return message
+  }
+
   const handleAnalysis = async () => {
     if (!file) {
       setError('No file selected')
@@ -713,7 +748,8 @@ export default function PCAPAnalyzer() {
       setActiveTab('overview')
     } catch (err) {
       console.error('Analysis error:', err)
-      setError(err instanceof Error ? err.message : 'Failed to analyze the file')
+      const message = err instanceof Error ? err.message : 'Failed to analyze the file'
+      setError(formatUserError(message))
       setAnalysisResults(null)
       setShowAnalysis(false)
     } finally {
@@ -787,13 +823,14 @@ export default function PCAPAnalyzer() {
       setIsLoading(false)
     } catch (error) {
       console.error('Error:', error)
-      setError(error instanceof Error ? error.message : 'An unknown error occurred')
+      const message = error instanceof Error ? error.message : 'An unknown error occurred'
+      setError(formatUserError(message))
       setIsLoading(false)
     }
   }
 
   const handleUploadError = (message: string) => {
-    setError(message)
+    setError(formatUserError(message))
     setSuccess(null)
   }
 
@@ -909,7 +946,8 @@ ${chatToSave.map(message => {
       setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
       console.error('Error getting response from Gemini:', err);
-      setError(err instanceof Error ? err.message : 'Failed to get response from the assistant');
+      const message = err instanceof Error ? err.message : 'Failed to get response from the assistant'
+      setError(formatUserError(message));
     } finally {
       setIsLoading(false);
     }
@@ -5780,7 +5818,23 @@ ${chatToSave.map(message => {
   }, [messages, isLoading]);
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen relative">
+      {error && (
+        <ErrorNotification
+          message={error}
+          onClose={() => setError(null)}
+        />
+      )}
+      {healthWarnings.length > 0 && (
+        <div className="fixed top-4 right-4 bg-yellow-50 border border-yellow-300 text-yellow-900 px-4 py-3 rounded shadow max-w-md z-50">
+          <div className="font-semibold mb-1">System checks</div>
+          <ul className="text-sm list-disc list-inside space-y-1">
+            {healthWarnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {/* Left Sidebar with Functions */}
       <div className="w-1/4 min-w-[300px] border-r p-4 bg-gray-50 flex flex-col">
         <h1 className="text-2xl font-bold mb-4 text-center">PcapLyzer</h1>
