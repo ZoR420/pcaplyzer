@@ -6,8 +6,9 @@ import fs from 'fs'
 
 const execAsync = promisify(exec)
 
-// Set a larger buffer size for tshark output (100MB)
-const EXEC_OPTIONS = { maxBuffer: 100 * 1024 * 1024 }
+// Set a larger buffer size for tshark output (default 100MB)
+const maxBufferMb = Number(process.env.TSHARK_MAX_BUFFER_MB || 100)
+const EXEC_OPTIONS = { maxBuffer: maxBufferMb * 1024 * 1024 }
 
 // Check if tshark is available
 async function isTsharkAvailable() {
@@ -159,6 +160,41 @@ export async function POST(request: Request) {
       )
       const timestamps = packetInfo.split('\n').filter(Boolean).map(Number)
       const packetCount = timestamps.length
+
+      if (packetCount === 0) {
+        return NextResponse.json({
+          trafficSummary: {
+            file_size: fileSize,
+            total_bytes: 0,
+            packet_count: 0,
+            time_range: {
+              start: null,
+              end: null,
+              duration: 0,
+              file_created: fileStats.birthtime.toISOString(),
+              file_modified: fileStats.mtime.toISOString()
+            },
+            protocol_counts: {},
+            packet_sizes: {
+              min: 0,
+              max: 0,
+              average: 0
+            },
+            ip_addresses: {
+              source: [],
+              destination: []
+            },
+            protocols: [],
+            tcp_ports: [],
+            udp_ports: [],
+            dns_queries: [],
+            packets: [],
+            conversations: [],
+            flowStats: []
+          }
+        })
+      }
+
       const firstEpoch = Math.min(...timestamps)
       const lastEpoch = Math.max(...timestamps)
       

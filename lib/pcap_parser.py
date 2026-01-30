@@ -1,8 +1,7 @@
 import dpkt
 import socket
 import datetime
-from openai import OpenAI
-import os
+# (OpenAI client removed; not required for parsing)
 from typing import List, Dict
 import json
 import sys
@@ -13,8 +12,7 @@ def mac_addr(address):
 
 class PcapParser:
     def __init__(self):
-        # Initialize OpenAI client with your API key
-        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        # OpenAI client not required for parsing
         self.parsed_packets = []
 
     def parse_pcap(self, pcap_file: str) -> List[Dict]:

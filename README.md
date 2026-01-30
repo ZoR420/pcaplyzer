@@ -83,8 +83,16 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 Create a `.env` file with the following variables:
 
 ```
+AI_PROVIDER=openai            # openai or gemini
 OPENAI_API_KEY=your_openai_api_key
-NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_api_key
+OPENAI_MODEL=gpt-4
+
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-1.5-flash
+
+CLEANUP_UPLOADS=false
+TSHARK_MAX_BUFFER_MB=100
+
 NODE_ENV=development
 DEBUG=true
 ```

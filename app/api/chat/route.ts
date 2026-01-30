@@ -1,82 +1,97 @@
 import { NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 import { spawn } from 'child_process'
 import path from 'path'
 import fs from 'fs'
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+const openAiApiKey = process.env.OPENAI_API_KEY
+const geminiApiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
+const aiProvider = (process.env.AI_PROVIDER || 'openai').toLowerCase()
+
+const openai = openAiApiKey ? new OpenAI({ apiKey: openAiApiKey }) : null
+const gemini = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null
 
 // Function to run Python script and get PCAP analysis
 async function analyzePcapFile(filePath: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const pythonScriptPath = path.join(process.cwd(), 'lib', 'pcap_parser.py')
-    const pythonCommand = process.platform === 'win32' ? 'python.exe' : 'python'
+    const pythonCandidates = process.platform === 'win32'
+      ? ['python.exe']
+      : [process.env.PYTHON_PATH, 'python3', 'python'].filter(Boolean) as string[]
 
-    const pythonProcess = spawn(pythonCommand, [
-      pythonScriptPath,
-      filePath
-    ], {
-      shell: process.platform === 'win32',
-      env: { 
-        ...process.env, 
-        PYTHONIOENCODING: 'utf-8',
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY 
-      }
-    })
+    let attemptIndex = 0
 
-    let dataString = ''
-    let errorString = ''
-
-    pythonProcess.stdout.on('data', (data) => {
-      dataString += data.toString('utf-8')
-    })
-
-    pythonProcess.stderr.on('data', (data) => {
-      errorString += data.toString('utf-8')
-    })
-
-    pythonProcess.on('error', (error) => {
-      reject(new Error(`Failed to start Python process: ${error.message}`))
-    })
-
-    pythonProcess.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Analysis failed: ${errorString}`))
-        return
-      }
-
-      try {
-        const jsonLines = dataString.split('\n').filter(line => {
-          try {
-            const trimmed = line.trim()
-            if (!trimmed) return false
-            JSON.parse(trimmed)
-            return true
-          } catch {
-            return false
-          }
-        })
-
-        if (jsonLines.length === 0) {
-          throw new Error('No analysis results found')
+    const startProcess = () => {
+      const pythonCommand = pythonCandidates[attemptIndex]
+      const pythonProcess = spawn(pythonCommand, [
+        pythonScriptPath,
+        filePath
+      ], {
+        shell: process.platform === 'win32',
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: 'utf-8'
         }
+      })
 
-        const lastJsonLine = jsonLines[jsonLines.length - 1]
-        const jsonData = JSON.parse(lastJsonLine)
+      let dataString = ''
+      let errorString = ''
 
-        if (jsonData.error) {
-          reject(new Error(jsonData.error))
+      pythonProcess.stdout.on('data', (data) => {
+        dataString += data.toString('utf-8')
+      })
+
+      pythonProcess.stderr.on('data', (data) => {
+        errorString += data.toString('utf-8')
+      })
+
+      pythonProcess.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT' && attemptIndex < pythonCandidates.length - 1) {
+          attemptIndex += 1
+          return startProcess()
+        }
+        reject(new Error(`Failed to start Python process: ${error.message}`))
+      })
+
+      pythonProcess.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Analysis failed: ${errorString}`))
           return
         }
 
-        resolve(jsonData)
-      } catch (error) {
-        reject(new Error(`Failed to parse analysis results: ${error}`))
-      }
-    })
+        try {
+          const jsonLines = dataString.split('\n').filter(line => {
+            try {
+              const trimmed = line.trim()
+              if (!trimmed) return false
+              JSON.parse(trimmed)
+              return true
+            } catch {
+              return false
+            }
+          })
+
+          if (jsonLines.length === 0) {
+            throw new Error('No analysis results found')
+          }
+
+          const lastJsonLine = jsonLines[jsonLines.length - 1]
+          const jsonData = JSON.parse(lastJsonLine)
+
+          if (jsonData.error) {
+            reject(new Error(jsonData.error))
+            return
+          }
+
+          resolve(jsonData)
+        } catch (error) {
+          reject(new Error(`Failed to parse analysis results: ${error}`))
+        }
+      })
+    }
+
+    startProcess()
   })
 }
 
@@ -137,13 +152,6 @@ Please provide a clear and concise answer based on the PCAP analysis data above.
 
 export async function POST(req: Request) {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
-        { status: 500 }
-      )
-    }
-
     const body = await req.json()
     const { message, fileName } = body
 
@@ -166,27 +174,60 @@ export async function POST(req: Request) {
       const pcapData = await analyzePcapFile(filePath)
       const prompt = createPrompt(pcapData, message)
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [
-          {
-            role: "system",
-            content: "You are a network analysis expert helping users understand their PCAP files. Provide clear, concise explanations focusing on the relevant information from the PCAP analysis."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 500
-      })
+      let responseText: string | null = null
 
-      if (!completion.choices[0]?.message?.content) {
-        throw new Error('No response from OpenAI')
+      if (aiProvider === 'gemini') {
+        if (!gemini) {
+          throw new Error('Gemini API key not configured')
+        }
+        const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+        const model = gemini.getGenerativeModel({ model: modelName })
+        const result = await model.generateContent(prompt)
+        responseText = result.response.text()
+      } else {
+        if (!openai) {
+          if (gemini) {
+            const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+            const model = gemini.getGenerativeModel({ model: modelName })
+            const result = await model.generateContent(prompt)
+            responseText = result.response.text()
+          } else {
+            throw new Error('OpenAI API key not configured')
+          }
+        } else {
+          const completion = await openai.chat.completions.create({
+            model: process.env.OPENAI_MODEL || "gpt-4",
+            messages: [
+              {
+                role: "system",
+                content: "You are a network analysis expert helping users understand their PCAP files. Provide clear, concise explanations focusing on the relevant information from the PCAP analysis."
+              },
+              {
+                role: "user",
+                content: prompt
+              }
+            ],
+            temperature: 0.7,
+            max_tokens: 500
+          })
+
+          responseText = completion.choices[0]?.message?.content || null
+        }
       }
 
-      return NextResponse.json({ response: completion.choices[0].message.content })
+      if (!responseText) {
+        throw new Error('No response from AI provider')
+      }
+
+      if (process.env.CLEANUP_UPLOADS === 'true') {
+        try {
+          await fs.promises.unlink(filePath)
+        } catch (cleanupError) {
+          console.warn('Failed to cleanup uploaded file:', cleanupError)
+        }
+      }
+
+      return NextResponse.json({ response: responseText })
     } catch (error: any) {
       return NextResponse.json(
         { 
