@@ -47,6 +47,21 @@ type CorrelatedCaseView = {
   guidedTriage: string[]
 }
 
+type CaseNote = {
+  id: string
+  createdAt: string
+  content: string
+}
+
+type CaseReport = {
+  report: {
+    notes: CaseNote[]
+    guidedTriage: string[]
+    timelinePreview: Array<{ summary: string; timestamp: string | null; category: string }>
+    generatedAt: string
+  }
+}
+
 type CaseRecord = {
   id: string
   title: string
@@ -73,6 +88,9 @@ export function CaseManager() {
   const [scapSummaries, setScapSummaries] = useState<Record<string, ScapSummary>>({})
   const [exportPreview, setExportPreview] = useState<ExportedCasePayload | null>(null)
   const [correlation, setCorrelation] = useState<CorrelatedCaseView | null>(null)
+  const [notes, setNotes] = useState<CaseNote[]>([])
+  const [noteDraft, setNoteDraft] = useState('')
+  const [reportPreview, setReportPreview] = useState<CaseReport | null>(null)
 
   const selectedCase = cases.find((entry) => entry.id === selectedCaseId) || null
 
@@ -114,6 +132,57 @@ export function CaseManager() {
 
 
 
+
+
+  async function loadCaseNotes() {
+    if (!selectedCaseId) return
+
+    const response = await fetch(`/api/cases/${selectedCaseId}/notes`)
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'Failed to load notes')
+    setNotes(data.notes || [])
+  }
+
+  async function saveCaseNote() {
+    if (!selectedCaseId || !noteDraft.trim()) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch(`/api/cases/${selectedCaseId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: noteDraft })
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to save note')
+      setNoteDraft('')
+      await loadCaseNotes()
+      setStatus('Case note saved')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to save note')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadCaseReport() {
+    if (!selectedCaseId) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch(`/api/cases/${selectedCaseId}/report`)
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to load report')
+      setReportPreview(data)
+      setStatus('Case report generated')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to load report')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function loadCorrelationView() {
     if (!selectedCaseId) return
@@ -249,6 +318,9 @@ export function CaseManager() {
                   <Button type="button" variant="outline" onClick={loadCorrelationView} disabled={loading}>
                     Correlate
                   </Button>
+                  <Button type="button" variant="outline" onClick={loadCaseReport} disabled={loading}>
+                    Report
+                  </Button>
                   <label className="inline-flex cursor-pointer items-center rounded-md border px-3 py-2 text-sm hover:bg-gray-50">
                     Add artifact
                     <input type="file" accept={ACCEPTED_EXTENSIONS} className="hidden" onChange={handleArtifactUpload} />
@@ -345,6 +417,38 @@ export function CaseManager() {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Case notes</div>
+                    <div className="mt-2 space-y-2">
+                      <textarea
+                        value={noteDraft}
+                        onChange={(event) => setNoteDraft(event.target.value)}
+                        placeholder="Add analyst notes, findings, or follow-ups..."
+                        className="min-h-[80px] w-full rounded border p-2 text-sm"
+                      />
+                      <Button type="button" variant="outline" onClick={saveCaseNote} disabled={loading || !noteDraft.trim()}>
+                        Save note
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-40 space-y-2 overflow-auto">
+                      {notes.length === 0 ? <div className="text-gray-500">No notes yet.</div> : notes.map((note) => (
+                        <div key={note.id} className="rounded border bg-white p-2">
+                          <div>{note.content}</div>
+                          <div className="mt-1 text-[11px] text-gray-500">{new Date(note.createdAt).toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {reportPreview ? (
+                    <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                      <div className="font-medium">Report preview</div>
+                      <div>Generated: {new Date(reportPreview.report.generatedAt).toLocaleString()}</div>
+                      <div>Notes: {reportPreview.report.notes.length}</div>
+                      <div>Triage items: {reportPreview.report.guidedTriage.length}</div>
                     </div>
                   ) : null}
                 </div>
