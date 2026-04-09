@@ -21,6 +21,16 @@ type ScapSummary = {
   notes: string[]
 }
 
+type ExportedCasePayload = {
+  case: CaseRecord
+  derivedArtifacts: Array<{
+    artifactId: string
+    kind: 'pcap' | 'pcapng' | 'scap'
+    summary: unknown
+  }>
+  exportedAt: string
+}
+
 type CaseRecord = {
   id: string
   title: string
@@ -45,6 +55,7 @@ export function CaseManager() {
   const [status, setStatus] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [scapSummaries, setScapSummaries] = useState<Record<string, ScapSummary>>({})
+  const [exportPreview, setExportPreview] = useState<ExportedCasePayload | null>(null)
 
   const selectedCase = cases.find((entry) => entry.id === selectedCaseId) || null
 
@@ -84,6 +95,25 @@ export function CaseManager() {
     }
   }
 
+
+
+  async function exportSelectedCase() {
+    if (!selectedCaseId) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch(`/api/cases/${selectedCaseId}/export`)
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to export case')
+      setExportPreview(data)
+      setStatus('Case export generated')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to export case')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function generateScapArtifactSummary(artifactId: string) {
     if (!selectedCaseId) return
@@ -176,13 +206,19 @@ export function CaseManager() {
                   <h3 className="text-md font-semibold">{selectedCase.title}</h3>
                   <p className="text-xs text-gray-500">Updated {new Date(selectedCase.updatedAt).toLocaleString()}</p>
                 </div>
-                <label className="inline-flex cursor-pointer items-center rounded-md border px-3 py-2 text-sm hover:bg-gray-50">
-                  Add artifact
-                  <input type="file" accept={ACCEPTED_EXTENSIONS} className="hidden" onChange={handleArtifactUpload} />
-                </label>
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" onClick={exportSelectedCase} disabled={loading}>
+                    Export case
+                  </Button>
+                  <label className="inline-flex cursor-pointer items-center rounded-md border px-3 py-2 text-sm hover:bg-gray-50">
+                    Add artifact
+                    <input type="file" accept={ACCEPTED_EXTENSIONS} className="hidden" onChange={handleArtifactUpload} />
+                  </label>
+                </div>
               </div>
 
-              <div className="space-y-2">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="space-y-2">
                 {selectedCase.artifacts.map((artifact) => (
                   <div key={artifact.id} className="rounded-md border bg-gray-50 px-3 py-2 text-sm">
                     <div className="flex items-start justify-between gap-3">
@@ -216,6 +252,42 @@ export function CaseManager() {
                   </div>
                 ))}
                 {selectedCase.artifacts.length === 0 ? <div className="text-sm text-gray-500">No artifacts in this case yet.</div> : null}
+                </div>
+                <div className="rounded-md border bg-white p-3 text-sm">
+                  <h4 className="mb-3 font-medium">Unified case view</h4>
+                  {selectedCase.artifacts.length === 0 ? (
+                    <div className="text-sm text-gray-500">Add PCAP or SCAP artifacts to compare them here.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {selectedCase.artifacts.map((artifact) => (
+                        <div key={`summary-${artifact.id}`} className="rounded border bg-gray-50 p-3">
+                          <div className="font-medium">{artifact.originalName}</div>
+                          <div className="text-xs text-gray-500">{artifact.kind.toUpperCase()}</div>
+                          {artifact.kind === 'scap' && scapSummaries[artifact.id] ? (
+                            <div className="mt-2 space-y-1 text-xs text-gray-700">
+                              <div>Processes: {scapSummaries[artifact.id]?.processTree.length || 0}</div>
+                              <div>Network events: {scapSummaries[artifact.id]?.networkActivity.length || 0}</div>
+                              <div>File events: {scapSummaries[artifact.id]?.fileActivity.length || 0}</div>
+                            </div>
+                          ) : artifact.kind === 'scap' ? (
+                            <div className="mt-2 text-xs text-amber-700">Generate SCAP summary to populate this view.</div>
+                          ) : (
+                            <div className="mt-2 text-xs text-gray-600">PCAP artifact ready for future unified views/export.</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {exportPreview ? (
+                    <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                      <div className="font-medium">Export preview</div>
+                      <div>Artifacts: {exportPreview.case.artifacts.length}</div>
+                      <div>Derived summaries: {exportPreview.derivedArtifacts.length}</div>
+                      <div>Generated: {new Date(exportPreview.exportedAt).toLocaleString()}</div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </>
           ) : (
