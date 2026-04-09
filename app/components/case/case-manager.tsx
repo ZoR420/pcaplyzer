@@ -62,6 +62,23 @@ type CaseReport = {
   }
 }
 
+type CaseFindings = {
+  findings: {
+    findings: Array<{
+      id: string
+      title: string
+      severity: 'low' | 'medium' | 'high'
+      category: 'network' | 'file' | 'process' | 'behavior'
+      summary: string
+      iocs: string[]
+    }>
+    iocs: string[]
+    score: number
+    severity: 'low' | 'medium' | 'high'
+    generatedAt: string
+  }
+}
+
 type CaseRecord = {
   id: string
   title: string
@@ -91,6 +108,7 @@ export function CaseManager() {
   const [notes, setNotes] = useState<CaseNote[]>([])
   const [noteDraft, setNoteDraft] = useState('')
   const [reportPreview, setReportPreview] = useState<CaseReport | null>(null)
+  const [findingsPreview, setFindingsPreview] = useState<CaseFindings | null>(null)
 
   const selectedCase = cases.find((entry) => entry.id === selectedCaseId) || null
 
@@ -161,6 +179,25 @@ export function CaseManager() {
       setStatus('Case note saved')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Failed to save note')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+
+  async function loadCaseFindings() {
+    if (!selectedCaseId) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch(`/api/cases/${selectedCaseId}/findings`)
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to load findings')
+      setFindingsPreview(data)
+      setStatus('Findings generated')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to load findings')
     } finally {
       setLoading(false)
     }
@@ -321,6 +358,9 @@ export function CaseManager() {
                   <Button type="button" variant="outline" onClick={loadCaseReport} disabled={loading}>
                     Report
                   </Button>
+                  <Button type="button" variant="outline" onClick={loadCaseFindings} disabled={loading}>
+                    Findings
+                  </Button>
                   <label className="inline-flex cursor-pointer items-center rounded-md border px-3 py-2 text-sm hover:bg-gray-50">
                     Add artifact
                     <input type="file" accept={ACCEPTED_EXTENSIONS} className="hidden" onChange={handleArtifactUpload} />
@@ -449,6 +489,24 @@ export function CaseManager() {
                       <div>Generated: {new Date(reportPreview.report.generatedAt).toLocaleString()}</div>
                       <div>Notes: {reportPreview.report.notes.length}</div>
                       <div>Triage items: {reportPreview.report.guidedTriage.length}</div>
+                    </div>
+                  ) : null}
+
+                  {findingsPreview ? (
+                    <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                      <div className="font-medium">Findings summary</div>
+                      <div>Severity: {findingsPreview.findings.severity.toUpperCase()}</div>
+                      <div>Score: {findingsPreview.findings.score}</div>
+                      <div>IOCs: {findingsPreview.findings.iocs.length}</div>
+                      <div className="mt-2 space-y-2">
+                        {findingsPreview.findings.findings.map((finding) => (
+                          <div key={finding.id} className="rounded border bg-white p-2">
+                            <div className="font-medium">{finding.title}</div>
+                            <div>{finding.summary}</div>
+                            <div className="text-[11px] text-gray-500">{finding.severity.toUpperCase()} • {finding.category}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                 </div>
