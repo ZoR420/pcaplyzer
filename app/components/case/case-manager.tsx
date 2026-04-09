@@ -14,6 +14,7 @@ type CaseArtifact = {
 }
 
 type ScapSummary = {
+  parser?: 'stratoshark-cli' | 'local-text-fallback'
   processTree: Array<{ pid: string; name: string }>
   networkActivity: Array<{ protocol?: string; source?: string; destination?: string }>
   fileActivity: Array<{ operation?: string; path?: string }>
@@ -202,6 +203,7 @@ export function CaseManager() {
                       if (!summary) return null
                       return (
                         <div className="mt-3 rounded border bg-white p-3 text-xs text-gray-700">
+                          <div>Parser: {summary.parser || 'unknown'}</div>
                           <div>Processes: {summary.processTree.length}</div>
                           <div>Network events: {summary.networkActivity.length}</div>
                           <div>File events: {summary.fileActivity.length}</div>
