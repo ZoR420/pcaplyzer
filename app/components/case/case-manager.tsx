@@ -101,6 +101,33 @@ type SavedRule = {
   createdAt: string
 }
 
+type CaseComparison = {
+  comparison: {
+    artifactDiff: {
+      onlyInLeft: string[]
+      onlyInRight: string[]
+    }
+    findingDiff: {
+      leftOnly: string[]
+      rightOnly: string[]
+    }
+    severityComparison: {
+      left: 'low' | 'medium' | 'high'
+      right: 'low' | 'medium' | 'high'
+      leftScore: number
+      rightScore: number
+    }
+    generatedAt: string
+  }
+}
+
+type TriageTemplate = {
+  id: string
+  name: string
+  steps: string[]
+  createdAt: string
+}
+
 type CaseRecord = {
   id: string
   title: string
@@ -134,6 +161,11 @@ export function CaseManager() {
   const [savedRules, setSavedRules] = useState<SavedRule[]>([])
   const [ruleName, setRuleName] = useState('')
   const [rulePattern, setRulePattern] = useState('')
+  const [comparisonTargetId, setComparisonTargetId] = useState('')
+  const [comparisonPreview, setComparisonPreview] = useState<CaseComparison | null>(null)
+  const [templates, setTemplates] = useState<TriageTemplate[]>([])
+  const [templateName, setTemplateName] = useState('')
+  const [templateSteps, setTemplateSteps] = useState('')
 
   const selectedCase = cases.find((entry) => entry.id === selectedCaseId) || null
 
@@ -210,6 +242,61 @@ export function CaseManager() {
   }
 
 
+
+
+  async function loadTemplates() {
+    const response = await fetch('/api/templates')
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'Failed to load templates')
+    setTemplates(data.templates || [])
+  }
+
+  async function saveTemplate() {
+    const steps = templateSteps.split('\n').map((step) => step.trim()).filter(Boolean)
+    if (!templateName.trim() || steps.length === 0) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: templateName, steps })
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to save template')
+      setTemplateName('')
+      setTemplateSteps('')
+      await loadTemplates()
+      setStatus('Triage template saved')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to save template')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function compareSelectedCases() {
+    if (!selectedCaseId || !comparisonTargetId) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch('/api/cases/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leftCaseId: selectedCaseId, rightCaseId: comparisonTargetId })
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to compare cases')
+      setComparisonPreview(data)
+      setStatus('Case comparison generated')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to compare cases')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function loadSavedRules() {
     const response = await fetch('/api/rules')
@@ -449,6 +536,45 @@ export function CaseManager() {
                       ) : null}
 
                   <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Case comparison</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={comparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)} placeholder="Compare with case ID" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={compareSelectedCases} disabled={loading || !selectedCaseId || !comparisonTargetId.trim()}>
+                        Compare cases
+                      </Button>
+                    </div>
+                    {comparisonPreview ? (
+                      <div className="mt-3 space-y-2">
+                        <div>Left-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInLeft.length}</div>
+                        <div>Right-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInRight.length}</div>
+                        <div>Left score: {comparisonPreview.comparison.severityComparison.leftScore}</div>
+                        <div>Right score: {comparisonPreview.comparison.severityComparison.rightScore}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Triage templates</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" className="w-full rounded border p-2 text-sm" />
+                      <textarea value={templateSteps} onChange={(event) => setTemplateSteps(event.target.value)} placeholder="One step per line" className="min-h-[80px] w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveTemplate} disabled={loading || !templateName.trim() || !templateSteps.trim()}>
+                        Save template
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {templates.length === 0 ? <div className="text-gray-500">No templates yet.</div> : templates.map((template) => (
+                        <div key={template.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{template.name}</div>
+                          <ul className="mt-1 list-disc pl-4">
+                            {template.steps.map((step, index) => <li key={`${template.id}-${index}`}>{step}</li>)}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                     <div className="font-medium">Saved detection rules</div>
                     <div className="mt-2 space-y-2">
                       <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
@@ -483,6 +609,45 @@ export function CaseManager() {
                           {summary.notes.length ? (
                             <div className="mt-2 text-amber-700">{summary.notes.join(' ')}</div>
                           ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Case comparison</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={comparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)} placeholder="Compare with case ID" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={compareSelectedCases} disabled={loading || !selectedCaseId || !comparisonTargetId.trim()}>
+                        Compare cases
+                      </Button>
+                    </div>
+                    {comparisonPreview ? (
+                      <div className="mt-3 space-y-2">
+                        <div>Left-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInLeft.length}</div>
+                        <div>Right-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInRight.length}</div>
+                        <div>Left score: {comparisonPreview.comparison.severityComparison.leftScore}</div>
+                        <div>Right score: {comparisonPreview.comparison.severityComparison.rightScore}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Triage templates</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" className="w-full rounded border p-2 text-sm" />
+                      <textarea value={templateSteps} onChange={(event) => setTemplateSteps(event.target.value)} placeholder="One step per line" className="min-h-[80px] w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveTemplate} disabled={loading || !templateName.trim() || !templateSteps.trim()}>
+                        Save template
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {templates.length === 0 ? <div className="text-gray-500">No templates yet.</div> : templates.map((template) => (
+                        <div key={template.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{template.name}</div>
+                          <ul className="mt-1 list-disc pl-4">
+                            {template.steps.map((step, index) => <li key={`${template.id}-${index}`}>{step}</li>)}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
 
                   <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                     <div className="font-medium">Saved detection rules</div>
@@ -549,6 +714,45 @@ export function CaseManager() {
                   ) : null}
 
                   <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Case comparison</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={comparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)} placeholder="Compare with case ID" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={compareSelectedCases} disabled={loading || !selectedCaseId || !comparisonTargetId.trim()}>
+                        Compare cases
+                      </Button>
+                    </div>
+                    {comparisonPreview ? (
+                      <div className="mt-3 space-y-2">
+                        <div>Left-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInLeft.length}</div>
+                        <div>Right-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInRight.length}</div>
+                        <div>Left score: {comparisonPreview.comparison.severityComparison.leftScore}</div>
+                        <div>Right score: {comparisonPreview.comparison.severityComparison.rightScore}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Triage templates</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" className="w-full rounded border p-2 text-sm" />
+                      <textarea value={templateSteps} onChange={(event) => setTemplateSteps(event.target.value)} placeholder="One step per line" className="min-h-[80px] w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveTemplate} disabled={loading || !templateName.trim() || !templateSteps.trim()}>
+                        Save template
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {templates.length === 0 ? <div className="text-gray-500">No templates yet.</div> : templates.map((template) => (
+                        <div key={template.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{template.name}</div>
+                          <ul className="mt-1 list-disc pl-4">
+                            {template.steps.map((step, index) => <li key={`${template.id}-${index}`}>{step}</li>)}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                     <div className="font-medium">Saved detection rules</div>
                     <div className="mt-2 space-y-2">
                       <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
@@ -591,6 +795,45 @@ export function CaseManager() {
                       </div>
                     </div>
                   ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Case comparison</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={comparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)} placeholder="Compare with case ID" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={compareSelectedCases} disabled={loading || !selectedCaseId || !comparisonTargetId.trim()}>
+                        Compare cases
+                      </Button>
+                    </div>
+                    {comparisonPreview ? (
+                      <div className="mt-3 space-y-2">
+                        <div>Left-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInLeft.length}</div>
+                        <div>Right-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInRight.length}</div>
+                        <div>Left score: {comparisonPreview.comparison.severityComparison.leftScore}</div>
+                        <div>Right score: {comparisonPreview.comparison.severityComparison.rightScore}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Triage templates</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" className="w-full rounded border p-2 text-sm" />
+                      <textarea value={templateSteps} onChange={(event) => setTemplateSteps(event.target.value)} placeholder="One step per line" className="min-h-[80px] w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveTemplate} disabled={loading || !templateName.trim() || !templateSteps.trim()}>
+                        Save template
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {templates.length === 0 ? <div className="text-gray-500">No templates yet.</div> : templates.map((template) => (
+                        <div key={template.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{template.name}</div>
+                          <ul className="mt-1 list-disc pl-4">
+                            {template.steps.map((step, index) => <li key={`${template.id}-${index}`}>{step}</li>)}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
 
                   <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                     <div className="font-medium">Saved detection rules</div>
@@ -648,6 +891,45 @@ export function CaseManager() {
                   ) : null}
 
                   <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Case comparison</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={comparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)} placeholder="Compare with case ID" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={compareSelectedCases} disabled={loading || !selectedCaseId || !comparisonTargetId.trim()}>
+                        Compare cases
+                      </Button>
+                    </div>
+                    {comparisonPreview ? (
+                      <div className="mt-3 space-y-2">
+                        <div>Left-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInLeft.length}</div>
+                        <div>Right-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInRight.length}</div>
+                        <div>Left score: {comparisonPreview.comparison.severityComparison.leftScore}</div>
+                        <div>Right score: {comparisonPreview.comparison.severityComparison.rightScore}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Triage templates</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" className="w-full rounded border p-2 text-sm" />
+                      <textarea value={templateSteps} onChange={(event) => setTemplateSteps(event.target.value)} placeholder="One step per line" className="min-h-[80px] w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveTemplate} disabled={loading || !templateName.trim() || !templateSteps.trim()}>
+                        Save template
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {templates.length === 0 ? <div className="text-gray-500">No templates yet.</div> : templates.map((template) => (
+                        <div key={template.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{template.name}</div>
+                          <ul className="mt-1 list-disc pl-4">
+                            {template.steps.map((step, index) => <li key={`${template.id}-${index}`}>{step}</li>)}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                     <div className="font-medium">Saved detection rules</div>
                     <div className="mt-2 space-y-2">
                       <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
@@ -688,6 +970,45 @@ export function CaseManager() {
                       </div>
                     </div>
                   ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Case comparison</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={comparisonTargetId} onChange={(event) => setComparisonTargetId(event.target.value)} placeholder="Compare with case ID" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={compareSelectedCases} disabled={loading || !selectedCaseId || !comparisonTargetId.trim()}>
+                        Compare cases
+                      </Button>
+                    </div>
+                    {comparisonPreview ? (
+                      <div className="mt-3 space-y-2">
+                        <div>Left-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInLeft.length}</div>
+                        <div>Right-only artifacts: {comparisonPreview.comparison.artifactDiff.onlyInRight.length}</div>
+                        <div>Left score: {comparisonPreview.comparison.severityComparison.leftScore}</div>
+                        <div>Right score: {comparisonPreview.comparison.severityComparison.rightScore}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Triage templates</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" className="w-full rounded border p-2 text-sm" />
+                      <textarea value={templateSteps} onChange={(event) => setTemplateSteps(event.target.value)} placeholder="One step per line" className="min-h-[80px] w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveTemplate} disabled={loading || !templateName.trim() || !templateSteps.trim()}>
+                        Save template
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {templates.length === 0 ? <div className="text-gray-500">No templates yet.</div> : templates.map((template) => (
+                        <div key={template.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{template.name}</div>
+                          <ul className="mt-1 list-disc pl-4">
+                            {template.steps.map((step, index) => <li key={`${template.id}-${index}`}>{step}</li>)}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
 
                   <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                     <div className="font-medium">Saved detection rules</div>
