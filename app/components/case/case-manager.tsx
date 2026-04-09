@@ -31,6 +31,22 @@ type ExportedCasePayload = {
   exportedAt: string
 }
 
+type CorrelatedCaseView = {
+  timeline: Array<{
+    artifactId: string
+    artifactKind: 'pcap' | 'pcapng' | 'scap'
+    category: 'process' | 'network' | 'file' | 'note'
+    timestamp: string | null
+    summary: string
+  }>
+  processNetworkMap: Array<{
+    processPid: string
+    processName: string
+    networkEvents: Array<{ protocol?: string; source?: string; destination?: string; timestamp?: string }>
+  }>
+  guidedTriage: string[]
+}
+
 type CaseRecord = {
   id: string
   title: string
@@ -56,6 +72,7 @@ export function CaseManager() {
   const [loading, setLoading] = useState(false)
   const [scapSummaries, setScapSummaries] = useState<Record<string, ScapSummary>>({})
   const [exportPreview, setExportPreview] = useState<ExportedCasePayload | null>(null)
+  const [correlation, setCorrelation] = useState<CorrelatedCaseView | null>(null)
 
   const selectedCase = cases.find((entry) => entry.id === selectedCaseId) || null
 
@@ -96,6 +113,25 @@ export function CaseManager() {
   }
 
 
+
+
+  async function loadCorrelationView() {
+    if (!selectedCaseId) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch(`/api/cases/${selectedCaseId}/correlate`)
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to load case correlation')
+      setCorrelation(data.correlation)
+      setStatus('Correlation view loaded')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to load case correlation')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function exportSelectedCase() {
     if (!selectedCaseId) return
@@ -210,6 +246,9 @@ export function CaseManager() {
                   <Button type="button" variant="outline" onClick={exportSelectedCase} disabled={loading}>
                     Export case
                   </Button>
+                  <Button type="button" variant="outline" onClick={loadCorrelationView} disabled={loading}>
+                    Correlate
+                  </Button>
                   <label className="inline-flex cursor-pointer items-center rounded-md border px-3 py-2 text-sm hover:bg-gray-50">
                     Add artifact
                     <input type="file" accept={ACCEPTED_EXTENSIONS} className="hidden" onChange={handleArtifactUpload} />
@@ -285,6 +324,27 @@ export function CaseManager() {
                       <div>Artifacts: {exportPreview.case.artifacts.length}</div>
                       <div>Derived summaries: {exportPreview.derivedArtifacts.length}</div>
                       <div>Generated: {new Date(exportPreview.exportedAt).toLocaleString()}</div>
+                    </div>
+                  ) : null}
+
+                  {correlation ? (
+                    <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                      <div className="font-medium">Guided triage</div>
+                      <ul className="mt-2 list-disc space-y-1 pl-4">
+                        {correlation.guidedTriage.map((item, index) => (
+                          <li key={`triage-${index}`}>{item}</li>
+                        ))}
+                      </ul>
+                      <div className="mt-3 font-medium">Timeline</div>
+                      <div className="mt-2 max-h-40 space-y-2 overflow-auto">
+                        {correlation.timeline.slice(0, 8).map((event, index) => (
+                          <div key={`timeline-${index}`} className="rounded border bg-white p-2">
+                            <div className="font-medium">{event.category.toUpperCase()}</div>
+                            <div>{event.summary}</div>
+                            <div className="text-[11px] text-gray-500">{event.timestamp || 'No timestamp'}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                 </div>
