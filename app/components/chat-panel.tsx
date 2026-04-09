@@ -4,11 +4,7 @@ import { useState } from 'react'
 import { Button } from "@/app/components/ui/button"
 import { ScrollArea } from "@/app/components/ui/scroll-area"
 
-interface ChatPanelProps {
-  fileContent: any
-}
-
-export default function ChatPanel({ fileContent }: ChatPanelProps) {
+export default function ChatPanel() {
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant', content: string }>>([])
   const [input, setInput] = useState('')
 

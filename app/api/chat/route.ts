@@ -2,19 +2,32 @@ import { NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { spawn } from 'child_process'
-import path from 'path'
 import fs from 'fs'
+import path from 'path'
 import { enforceApiGuard } from '@/lib/api-guard'
+import { resolveUploadedFilePath } from '@/lib/upload-storage'
 
 const openAiApiKey = process.env.OPENAI_API_KEY
-const geminiApiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
+const geminiApiKey = process.env.GEMINI_API_KEY
 const aiProvider = (process.env.AI_PROVIDER || 'openai').toLowerCase()
 
 const openai = openAiApiKey ? new OpenAI({ apiKey: openAiApiKey }) : null
 const gemini = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null
 
 // Function to run Python script and get PCAP analysis
-async function analyzePcapFile(filePath: string): Promise<any> {
+type PcapAnalysis = Record<string, unknown> & {
+  error?: string
+  packet_count?: number
+  time_range?: { start?: string; end?: string }
+  protocols?: string[]
+  protocol_counts?: Record<string, number>
+  ip_addresses?: { source?: string[]; destination?: string[] }
+  tcp_ports?: number[]
+  udp_ports?: number[]
+  packet_sizes?: { min?: number; max?: number; average?: number; total?: number }
+}
+
+async function analyzePcapFile(filePath: string): Promise<PcapAnalysis> {
   return new Promise((resolve, reject) => {
     const pythonScriptPath = path.join(process.cwd(), 'lib', 'pcap_parser.py')
     const pythonCandidates = process.platform === 'win32'
@@ -25,6 +38,10 @@ async function analyzePcapFile(filePath: string): Promise<any> {
 
     const startProcess = () => {
       const pythonCommand = pythonCandidates[attemptIndex]
+      if (!pythonCommand) {
+        reject(new Error('No Python interpreter available'))
+        return
+      }
       const pythonProcess = spawn(pythonCommand, [
         pythonScriptPath,
         filePath
@@ -78,7 +95,10 @@ async function analyzePcapFile(filePath: string): Promise<any> {
           }
 
           const lastJsonLine = jsonLines[jsonLines.length - 1]
-          const jsonData = JSON.parse(lastJsonLine)
+          if (!lastJsonLine) {
+            throw new Error('No analysis results found')
+          }
+          const jsonData = JSON.parse(lastJsonLine) as PcapAnalysis
 
           if (jsonData.error) {
             reject(new Error(jsonData.error))
@@ -97,7 +117,7 @@ async function analyzePcapFile(filePath: string): Promise<any> {
 }
 
 // Function to create a structured prompt for OpenAI
-function createPrompt(pcapData: any, userQuestion: string): string {
+function createPrompt(pcapData: PcapAnalysis, userQuestion: string): string {
   if (!pcapData || Object.keys(pcapData).length === 0) {
     return `No PCAP analysis data is available. User question: ${userQuestion}`
   }
@@ -106,7 +126,7 @@ function createPrompt(pcapData: any, userQuestion: string): string {
     return `Error analyzing PCAP file: ${pcapData.error}\nUser question: ${userQuestion}`
   }
 
-  function formatArray(arr: any[], maxItems: number = 5): string {
+  function formatArray(arr: Array<string | number>, maxItems: number = 5): string {
     if (!arr || arr.length === 0) return 'None';
     const total = arr.length;
     const items = arr.slice(0, maxItems);
@@ -174,7 +194,7 @@ export async function POST(req: Request) {
       )
     }
 
-    const filePath = path.join(process.cwd(), 'uploads', fileName)
+    const filePath = await resolveUploadedFilePath(fileName)
     if (!fs.existsSync(filePath)) {
       return NextResponse.json(
         { error: 'PCAP file not found' },
@@ -240,20 +260,20 @@ export async function POST(req: Request) {
       }
 
       return NextResponse.json({ response: responseText })
-    } catch (error: any) {
+    } catch (error) {
       return NextResponse.json(
-        { 
+        {
           error: 'Analysis failed',
-          message: error.message
+          message: error instanceof Error ? error.message : 'Analysis failed'
         },
         { status: 500 }
       )
     }
-  } catch (error: any) {
+  } catch (error) {
     return NextResponse.json(
-      { 
+      {
         error: 'Request failed',
-        message: error.message
+        message: error instanceof Error ? error.message : 'Request failed'
       },
       { status: 500 }
     )

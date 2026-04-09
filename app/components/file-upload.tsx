@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Loader2 } from 'lucide-react'
 import { Card } from "@/app/components/ui/card"
@@ -75,7 +75,7 @@ export default function FileUpload({ onFileUpload, onError, onSuccess }: FileUpl
     }
   }
 
-  const onDrop = useCallback(async (acceptedFiles: File[], rejectedFiles: any[]) => {
+  const onDrop = async (acceptedFiles: File[], rejectedFiles: unknown[]) => {
     console.log('Files dropped:', { 
       accepted: acceptedFiles.map(f => ({ name: f.name, size: f.size, type: f.type })),
       rejected: rejectedFiles 
@@ -109,7 +109,7 @@ export default function FileUpload({ onFileUpload, onError, onSuccess }: FileUpl
       setUploading(false)
       setUploadProgress(0)
     }
-  }, [onFileUpload, onError, onSuccess])
+  }
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes'

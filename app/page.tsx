@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from "@/app/components/ui/button"
 import { Card } from "@/app/components/ui/card"
 import { ScrollArea } from "@/app/components/ui/scroll-area"
@@ -12,13 +12,8 @@ import { ResponsiveBar } from '@nivo/bar'
 import { ResponsiveLine } from '@nivo/line'
 import { ResponsivePie } from '@nivo/pie'
 import { ChevronUpIcon } from 'lucide-react'
-import { PointTooltipProps as NivoPointTooltipProps } from '@nivo/line';
 import { PieTooltipProps } from '@nivo/pie';
-import { BarTooltipProps, BarDatum } from '@nivo/bar';
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { ResponsiveNetwork } from '@nivo/network'
-import { ResponsiveHeatMap } from '@nivo/heatmap'
-import { ResponsiveGeoMap } from '@nivo/geo'
+import { BarTooltipProps } from '@nivo/bar';
 import dynamic from 'next/dynamic'
 
 // Add this near the top of your file with other imports
@@ -99,17 +94,6 @@ interface FlowStats {
   rttStats: RTTStats | null;
   retransmissionCount: number;
   throughput: number;
-}
-
-interface Conversation {
-  sourceIp: string;
-  destinationIp: string;
-  protocol: string;
-  packetCount: number;
-  dataVolume: number;
-  duration: number;
-  hasErrors: boolean;
-  hasRetransmissions: boolean;
 }
 
 interface TimingStats {
@@ -296,24 +280,6 @@ interface AnalysisResults {
   trafficSummary: TrafficSummary;
 }
 
-interface ChartDatum extends BarDatum {
-  x: string;
-  y: number;
-}
-
-interface PointTooltipProps {
-  point: {
-    data: {
-      x: string | number;
-      y: number;
-    };
-  };
-}
-
-interface SizeMap {
-  [key: number]: string;
-}
-
 interface ICMPPacket {
   number: number;
   source: string;
@@ -336,14 +302,6 @@ interface UnusualICMPData {
 interface ChartData {
   x: string;
   y: number;
-}
-
-const formatBytes = (bytes: number) => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 }
 
 // Add type definitions at the top of the file
@@ -396,18 +354,6 @@ const ResizableHeader: React.FC<ResizableHeaderProps> = ({
   );
 };
 
-// Add this configuration near the top of your component
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || '');
-
-// Add this near your other interface definitions
-interface GeminiResponse {
-  text: string;
-  safetyRatings: Array<{
-    category: string;
-    probability: string;
-  }>;
-}
-
 // First, add these interfaces at the top of the file with other interfaces
 interface NetworkNode {
   id: string;
@@ -431,7 +377,6 @@ export default function PCAPAnalyzer() {
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [analysisResults, setAnalysisResults] = useState<AnalysisResults | null>(null)
-  const [showAnalysis, setShowAnalysis] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
   const [conversationSort, setConversationSort] = useState<{
     field: 'sourceIp' | 'destinationIp' | 'protocol' | 'packetCount' | 'dataVolume' | 'duration' | null;
@@ -744,14 +689,12 @@ export default function PCAPAnalyzer() {
       }
 
       setAnalysisResults(data)
-      setShowAnalysis(true)
       setActiveTab('overview')
     } catch (err) {
       console.error('Analysis error:', err)
       const message = err instanceof Error ? err.message : 'Failed to analyze the file'
       setError(formatUserError(message))
       setAnalysisResults(null)
-      setShowAnalysis(false)
     } finally {
       setIsLoading(false)
     }
@@ -890,124 +833,33 @@ ${chatToSave.map(message => {
     setError(null);
 
     try {
-      // Initialize the model
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: newMessage.content, fileName: file.name })
+      });
 
-      // Create context from PCAP analysis
-      const pcapContext = createPcapContext(analysisResults.trafficSummary);
-      
-      // Extract keywords from user's question to determine relevant context
-      const question = inputMessage.toLowerCase();
-      let relevantContext = '';
-
-      // Add relevant sections based on the question
-      if (question.includes('dns') || question.includes('domain')) {
-        relevantContext += pcapContext.split('DNS Activity:')[1]?.split(/(?=\w+ Statistics:)/)[0] || '';
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.message || 'Failed to get response from the assistant');
       }
-      if (question.includes('flow') || question.includes('connection') || question.includes('traffic')) {
-        relevantContext += pcapContext.split('Flow Statistics:')[1]?.split(/(?=\w+ Statistics:)/)[0] || '';
-      }
-      if (question.includes('performance') || question.includes('latency') || question.includes('rtt')) {
-        relevantContext += pcapContext.split('Performance Metrics:')[1]?.split(/(?=\w+ Statistics:)/)[0] || '';
-      }
-      if (question.includes('icmp') || question.includes('ping')) {
-        relevantContext += pcapContext.split('ICMP Statistics:')[1]?.split(/(?=\w+ Statistics:)/)[0] || '';
-      }
-      if (question.includes('arp')) {
-        relevantContext += pcapContext.split('ARP Statistics:')[1]?.split(/(?=\w+ Statistics:)/)[0] || '';
-      }
-
-      // Always include basic file and network information
-      const basicInfo = pcapContext.split('Network Overview:')[0] || '';
-      relevantContext = basicInfo + (relevantContext || pcapContext.split('Network Overview:')[1]?.split('DNS Activity:')[0] || '');
-
-      // Combine context with user's question
-      const prompt = `
-        PCAP Analysis Context:
-        ${relevantContext.trim()}
-
-        User Question: ${inputMessage}
-
-        Please provide a detailed analysis based on this PCAP data, focusing specifically on answering the user's question.
-      `.trim();
-
-      // Send message with context
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
 
       const assistantMessage: ChatMessage = {
         role: 'assistant',
-        content: text,
+        content: data.response || 'No response returned.',
         timestamp: new Date().toISOString(),
         id: crypto.randomUUID()
       };
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
-      console.error('Error getting response from Gemini:', err);
-      const message = err instanceof Error ? err.message : 'Failed to get response from the assistant'
+      console.error('Error getting assistant response:', err);
+      const message = err instanceof Error ? err.message : 'Failed to get response from the assistant';
       setError(formatUserError(message));
     } finally {
       setIsLoading(false);
     }
   };
-
-  // Add this helper function to create context from PCAP analysis
-  const createPcapContext = (summary: TrafficSummary): string => {
-    // Create a concise summary focusing on the most important information
-    return `
-      File Information:
-      - Size: ${formatBytes(summary.file_size)}
-      - Total Packets: ${summary.packet_count}
-      - Time Range: ${summary.time_range.start} to ${summary.time_range.end}
-      - Duration: ${formatDuration(summary.time_range.duration)}
-
-      Network Overview:
-      - Total Traffic Volume: ${formatBytes(summary.total_bytes)}
-      - Unique Source IPs: ${summary.ip_addresses.source.length}
-      - Unique Destination IPs: ${summary.ip_addresses.destination.length}
-      - Active Protocols: ${summary.protocols.join(', ')}
-
-      Packet Statistics:
-      - Average Size: ${formatBytes(summary.packet_sizes.average)}
-      - Min Size: ${formatBytes(summary.packet_sizes.min)}
-      - Max Size: ${formatBytes(summary.packet_sizes.max)}
-
-      ${summary.dns_queries.length > 0 ? `
-      DNS Activity:
-      - Total Queries: ${summary.dns_queries.length}
-      - Top Queries: ${summary.dns_queries.slice(0, 5).map(q => q.query).join(', ')}
-      ` : ''}
-
-      ${summary.flowStats ? `
-      Flow Statistics:
-      - Total Flows: ${summary.flowStats.length}
-      - Notable Issues: ${summary.flowStats.filter(f => f.retransmissionCount > 0).length} flows with retransmissions
-      ` : ''}
-
-      ${summary.timingStats ? `
-      Performance Metrics:
-      - Average TCP RTT: ${summary.timingStats.latencyMetrics.rtt.tcp.average.toFixed(2)}ms
-      - Retransmissions: ${summary.timingStats.retransmissions.count}
-      - Out of Order Packets: ${summary.timingStats.packetOrder.outOfOrderCount}
-      ` : ''}
-
-      ${summary.icmpStats ? `
-      ICMP Statistics:
-      - Total ICMP Packets: ${summary.icmpStats.totalPackets}
-      - Echo Requests/Replies: ${summary.icmpStats.packetTypes.echoRequest}/${summary.icmpStats.packetTypes.echoReply}
-      - Errors: ${summary.icmpStats.packetTypes.destUnreachable + summary.icmpStats.packetTypes.ttlExpired}
-      ` : ''}
-
-      ${summary.arpStats ? `
-      ARP Statistics:
-      - Requests: ${summary.arpStats.requests}
-      - Replies: ${summary.arpStats.replies}
-      - Unresolved: ${summary.arpStats.unresolvedRequests}
-      ` : ''}
-    `.trim().replace(/\n\s+/g, '\n').replace(/\n{3,}/g, '\n\n');
-  }
 
   const renderOverview = () => {
     if (!analysisResults?.trafficSummary) {
@@ -2519,7 +2371,9 @@ ${chatToSave.map(message => {
     // Calculate the start time based on the selected range
     const calculateStartTime = () => {
       if (!summary.packets || summary.packets.length === 0) return 0;
-      const lastPacketTime = new Date(summary.packets[summary.packets.length - 1].time || 0).getTime();
+      const lastPacket = summary.packets[summary.packets.length - 1];
+      if (!lastPacket) return 0;
+      const lastPacketTime = new Date(lastPacket.time || 0).getTime();
       if (selectedTimeRange === 'all') return 0;
       return lastPacketTime - (timeRanges[selectedTimeRange as keyof typeof timeRanges] * 1000);
     };
@@ -2990,7 +2844,7 @@ ${chatToSave.map(message => {
         case 'destinationIp':
           return (a.destinationIp.localeCompare(b.destinationIp)) * direction;
         case 'timestamp':
-          return (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) * direction;
+          return (new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()) * direction;
         case 'details':
           return (a.details.localeCompare(b.details)) * direction;
         default:
@@ -3219,7 +3073,7 @@ ${chatToSave.map(message => {
         return {
           method: methodMatch ? methodMatch[1] : 'Unknown',
           url: urlMatch ? urlMatch[1] : 'Unknown',
-          statusCode: statusMatch ? parseInt(statusMatch[1]) : 0,
+          statusCode: statusMatch?.[1] ? parseInt(statusMatch[1], 10) : 0,
           hostname: hostMatch ? hostMatch[1] : 'Unknown',
           contentType: contentTypeMatch ? contentTypeMatch[1] : 'Unknown',
           timestamp: packet.time || new Date().toISOString()
@@ -3255,17 +3109,17 @@ ${chatToSave.map(message => {
       
       switch (httpSort.field) {
         case 'method':
-          return (a.method.localeCompare(b.method)) * direction;
+          return ((a.method || '').localeCompare(b.method || '')) * direction;
         case 'url':
-          return (a.url.localeCompare(b.url)) * direction;
+          return ((a.url || '').localeCompare(b.url || '')) * direction;
         case 'statusCode':
           return (a.statusCode - b.statusCode) * direction;
         case 'hostname':
-          return (a.hostname.localeCompare(b.hostname)) * direction;
+          return ((a.hostname || '').localeCompare(b.hostname || '')) * direction;
         case 'contentType':
-          return (a.contentType.localeCompare(b.contentType)) * direction;
+          return ((a.contentType || '').localeCompare(b.contentType || '')) * direction;
         case 'timestamp':
-          return (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) * direction;
+          return (new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()) * direction;
         default:
           return 0;
       }
@@ -3279,15 +3133,15 @@ ${chatToSave.map(message => {
       
       switch (tlsSort.field) {
         case 'version':
-          return (a.version.localeCompare(b.version)) * direction;
+          return ((a.version || '').localeCompare(b.version || '')) * direction;
         case 'cipherSuite':
-          return (a.cipherSuite.localeCompare(b.cipherSuite)) * direction;
+          return ((a.cipherSuite || '').localeCompare(b.cipherSuite || '')) * direction;
         case 'hostname':
-          return (a.hostname.localeCompare(b.hostname)) * direction;
+          return ((a.hostname || '').localeCompare(b.hostname || '')) * direction;
         case 'certIssuer':
-          return (a.certIssuer.localeCompare(b.certIssuer)) * direction;
+          return ((a.certIssuer || '').localeCompare(b.certIssuer || '')) * direction;
         case 'certExpiration':
-          return (new Date(a.certExpiration).getTime() - new Date(b.certExpiration).getTime()) * direction;
+          return (new Date(a.certExpiration || 0).getTime() - new Date(b.certExpiration || 0).getTime()) * direction;
         default:
           return 0;
       }
@@ -3650,7 +3504,7 @@ ${chatToSave.map(message => {
           queryType: typeMatch ? typeMatch[1] : 'Unknown',
           response: responseMatch ? responseMatch[1] : 'No Response',
           status: statusMatch ? statusMatch[1] : 'Unknown',
-          responseTime: timeMatch ? parseInt(timeMatch[1]) : 0,
+          responseTime: timeMatch?.[1] ? parseInt(timeMatch[1], 10) : 0,
           timestamp: packet.time || new Date().toISOString(),
           isSuspicious: false
         };
@@ -3669,7 +3523,7 @@ ${chatToSave.map(message => {
         query.status === 'NXDOMAIN' || // Non-existent domain
         query.responseTime > 500 || // High response time
         domainCounts.get(query.queryName) > 10 || // Multiple queries
-        suspiciousTLDs.some(tld => query.queryName.toLowerCase().endsWith(tld)) // Suspicious TLD
+        suspiciousTLDs.some(tld => (query.queryName || '').toLowerCase().endsWith(tld)) // Suspicious TLD
       );
     });
 
@@ -3684,7 +3538,7 @@ ${chatToSave.map(message => {
         if (dnsQueryStatus === 'NOERROR') {
           statusMatch = query.status === 'NOERROR';
         } else if (dnsQueryStatus === 'error') {
-          statusMatch = ['NXDOMAIN', 'SERVFAIL'].includes(query.status);
+          statusMatch = ['NXDOMAIN', 'SERVFAIL'].includes(query.status || '');
         } else {
           statusMatch = query.status === dnsQueryStatus;
         }
@@ -3699,7 +3553,7 @@ ${chatToSave.map(message => {
       if (!acc[hour]) {
         acc[hour] = { hour: `${hour}:00`, success: 0, failed: 0 };
       }
-      if (['NXDOMAIN', 'SERVFAIL'].includes(query.status)) {
+      if (['NXDOMAIN', 'SERVFAIL'].includes(query.status || '')) {
         acc[hour].failed++;
       } else {
         acc[hour].success++;
@@ -3717,17 +3571,17 @@ ${chatToSave.map(message => {
       
       switch (dnsSort.field) {
         case 'queryName':
-          return (a.queryName.localeCompare(b.queryName)) * direction;
+          return ((a.queryName || '').localeCompare(b.queryName || '')) * direction;
         case 'queryType':
-          return (a.queryType.localeCompare(b.queryType)) * direction;
+          return ((a.queryType || '').localeCompare(b.queryType || '')) * direction;
         case 'response':
-          return (a.response.localeCompare(b.response)) * direction;
+          return ((a.response || '').localeCompare(b.response || '')) * direction;
         case 'status':
-          return (a.status.localeCompare(b.status)) * direction;
+          return ((a.status || '').localeCompare(b.status || '')) * direction;
         case 'responseTime':
           return (a.responseTime - b.responseTime) * direction;
         case 'timestamp':
-          return (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) * direction;
+          return (new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime()) * direction;
         default:
           return 0;
       }
@@ -3984,7 +3838,7 @@ ${chatToSave.map(message => {
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
                             ${query.status === 'NOERROR' ? 'bg-green-100 text-green-800' :
-                              ['NXDOMAIN', 'SERVFAIL'].includes(query.status) ? 'bg-red-100 text-red-800' :
+                              ['NXDOMAIN', 'SERVFAIL'].includes(query.status || '') ? 'bg-red-100 text-red-800' :
                               'bg-yellow-100 text-yellow-800'}`}
                           >
                             {query.status}
@@ -4068,7 +3922,7 @@ ${chatToSave.map(message => {
         count: 0,
       },
       malformedPackets: [] as ICMPPacket[],
-      tunneling: [] as any[],
+      tunneling: [] as Array<{ number: number; time?: string; source: string; destination: string; length?: number }>,
       highFrequencyPings: new Map<string, number>()
     };
 
@@ -4079,9 +3933,9 @@ ${chatToSave.map(message => {
       requests: 0,
       replies: 0,
       unresolvedRequests: new Set<string>(),
-      gratuitousArp: [] as any[],
+      gratuitousArp: [] as Array<{ time?: string; ip?: string; mac?: string; info?: string }>,
       duplicateMappings: new Map<string, Set<string>>(),
-      addressConflicts: [] as any[],
+      addressConflicts: [] as Array<{ time?: string; ip: string; macs: string[]; type: string }>,
       uniqueIPs: new Set<string>(),
       uniqueMACs: new Set<string>()
     };
@@ -4089,7 +3943,7 @@ ${chatToSave.map(message => {
     // Track ICMP Echo pairs for RTT calculation
     const icmpEchoPairs = new Map<string, number>();
 
-    summary.packets.forEach((packet, index) => {
+    summary.packets.forEach((packet) => {
       if (packet.protocol === 'ICMP') {
         icmpStats.totalPackets++;
         icmpStats.totalBytes += packet.length;
@@ -4097,8 +3951,8 @@ ${chatToSave.map(message => {
         // Extract ICMP type and code
         const typeMatch = packet.info?.match(/Type: (\d+)/);
         const codeMatch = packet.info?.match(/Code: (\d+)/);
-        const type = typeMatch ? parseInt(typeMatch[1]) : -1;
-        const code = codeMatch ? parseInt(codeMatch[1]) : -1;
+        const type = typeMatch?.[1] ? parseInt(typeMatch[1], 10) : -1;
+        const code = codeMatch?.[1] ? parseInt(codeMatch[1], 10) : -1;
 
         // Categorize ICMP types
         let typeStr = 'Unknown';
@@ -4161,7 +4015,7 @@ ${chatToSave.map(message => {
         if (packet.length > 1000) {
           icmpStats.tunneling.push({
             number: packet.number,
-            time: packet.time,
+            time: packet.time || undefined,
             source: packet.source,
             destination: packet.destination,
             length: packet.length
@@ -4196,7 +4050,7 @@ ${chatToSave.map(message => {
           const duplicateCount = arpStats.duplicateMappings.get(ip)?.size ?? 0;
           if (duplicateCount > 1) {
             arpStats.addressConflicts.push({
-              time: packet.time,
+              time: packet.time || undefined,
               ip: ip,
               macs: Array.from(arpStats.duplicateMappings.get(ip) ?? new Set()),
               type: isRequest ? 'Request' : 'Reply'
@@ -4209,7 +4063,7 @@ ${chatToSave.map(message => {
             (ip && packet.source === ip) || 
             (packet.info?.includes('request') && packet.source === packet.destination)) {
           arpStats.gratuitousArp.push({
-            time: packet.time,
+            time: packet.time || undefined,
             ip: ip,
             mac: mac,
             info: packet.info
@@ -4246,9 +4100,9 @@ ${chatToSave.map(message => {
         details: 'Unusually large ICMP packet'
       })),
       ...Array.from(icmpStats.highFrequencyPings.entries())
-        .filter(([_, count]) => count > 100)
+        .filter(([, count]) => count > 100)
         .map(([addr, count]) => {
-          const [source, destination] = addr.split('-')
+          const [source = 'Unknown', destination = 'Unknown'] = addr.split('-')
           return {
             number: -1,
             time: 'Multiple',
@@ -4597,7 +4451,7 @@ ${chatToSave.map(message => {
                         {arpStats.gratuitousArp.map((arp, index) => (
                           <tr key={index} className="bg-yellow-50">
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {new Date(arp.time).toLocaleString()}
+                              {new Date(arp.time || 0).toLocaleString()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{arp.ip}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{arp.mac}</td>
@@ -4628,7 +4482,7 @@ ${chatToSave.map(message => {
                         {arpStats.addressConflicts.map((conflict, index) => (
                           <tr key={index} className="bg-red-50">
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {new Date(conflict.time).toLocaleString()}
+                              {new Date(conflict.time || 0).toLocaleString()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{conflict.ip}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -4854,16 +4708,16 @@ ${chatToSave.map(message => {
   // Add this useEffect near the top of the component with other hooks
   useEffect(() => {
     if (analysisResults?.trafficSummary) {
-    const metrics = {
-      maliciousIPs: [] as any[],
-        portScans: [] as any[],
-        highRiskPorts: [] as any[],
-        protocolMisuse: [] as any[],
-        authFailures: [] as any[],
-        encryptionIssues: [] as any[],
-        c2Patterns: [] as any[],
-        trafficSpikes: [] as any[]
-      };
+    const metrics: typeof securityMetrics = {
+      maliciousIPs: [],
+      portScans: [],
+      highRiskPorts: [],
+      protocolMisuse: [],
+      authFailures: [],
+      encryptionIssues: [],
+      c2Patterns: [],
+      trafficSpikes: []
+    };
 
       const packets = analysisResults.trafficSummary.packets;
       const portActivity = new Map<string, Map<number, { timestamp: number, type: string }>>();
@@ -4915,7 +4769,9 @@ ${chatToSave.map(message => {
             // Sequential port sweep detection
           let sequential = 0;
           for (let i = 1; i < ports.length; i++) {
-            if (ports[i] - ports[i-1] === 1) sequential++;
+            const currentPort = ports[i];
+            const previousPort = ports[i - 1];
+            if (currentPort !== undefined && previousPort !== undefined && currentPort - previousPort === 1) sequential++;
             else sequential = 0;
             
             if (sequential >= 4) {
@@ -4961,9 +4817,8 @@ ${chatToSave.map(message => {
         }
       };
 
-      packets.forEach((packet, index) => {
+      packets.forEach((packet) => {
         const timestamp = new Date(packet.time || 0).getTime();
-        const srcPort = parseInt(packet.srcPort);
         const dstPort = parseInt(packet.dstPort);
         const key = `${packet.source}-${packet.destination}`;
         const timeKey = Math.floor(timestamp / 60000).toString();
@@ -4985,8 +4840,6 @@ ${chatToSave.map(message => {
             port: dstPort,
             protocol: packet.protocol,
               count: portStats.count,
-              severity: portInfo?.severity,
-              service: portInfo?.service,
               details: `${portInfo?.service} (${portInfo?.reason}) - Access from ${packet.source}`
             });
           }
@@ -5006,7 +4859,11 @@ ${chatToSave.map(message => {
           if (conn.timestamps.length >= 5) {
             const intervals = [];
             for (let i = 1; i < conn.timestamps.length; i++) {
-              intervals.push(conn.timestamps[i] - conn.timestamps[i-1]);
+              const currentTs = conn.timestamps[i];
+              const previousTs = conn.timestamps[i - 1];
+              if (currentTs !== undefined && previousTs !== undefined) {
+                intervals.push(currentTs - previousTs);
+              }
             }
             const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
             const isRegular = intervals.every(interval => 
@@ -5020,7 +4877,6 @@ ${chatToSave.map(message => {
                 target: packet.destination,
                 pattern: 'Regular Beaconing',
                 timestamp: packet.time || '',
-                details: `Regular communication every ${(avgInterval/1000).toFixed(2)}s`
               });
             }
           }
@@ -5033,7 +4889,6 @@ ${chatToSave.map(message => {
               target: packet.destination,
               pattern: 'Large Data Transfer',
               timestamp: packet.time || '',
-              details: `${(conn.bytes/1024/1024).toFixed(2)}MB transferred`
             });
           }
         }
@@ -5117,7 +4972,6 @@ ${chatToSave.map(message => {
             source: packet.source,
             target: packet.destination,
                 timestamp: packet.time || '',
-                details: `${attempts.failures} failed attempts in ${(timestamp - attempts.timestamps[0])/1000}s across ${attempts.protocols.size} protocols`
               });
             }
           }
@@ -5137,7 +4991,7 @@ ${chatToSave.map(message => {
               
               // Extract cipher information
               const cipherMatch = packet.info.match(/Cipher: ([^\s,]+)/);
-              if (cipherMatch) {
+              if (cipherMatch?.[1]) {
                 versionStats.ciphers.add(cipherMatch[1]);
               }
 
@@ -5209,7 +5063,6 @@ ${chatToSave.map(message => {
             protocol: dominantProtocol,
             rate: pps,
             baseline,
-            details: `${pps.toFixed(2)} packets/sec exceeds baseline of ${baseline} packets/sec (dominant protocol: ${dominantProtocol})`
           });
         }
       });
@@ -5633,190 +5486,6 @@ ${chatToSave.map(message => {
 
   // Add these data processing functions after the isInternalIP function
 
-  const processProtocolData = (packets: Packet[]) => {
-    const protocolCounts = new Map();
-    
-    packets.forEach(packet => {
-      if (!packet.protocol) return;
-      protocolCounts.set(
-        packet.protocol, 
-        (protocolCounts.get(packet.protocol) || 0) + 1
-      );
-    });
-
-    return Array.from(protocolCounts.entries()).map(([id, value]) => ({
-      id,
-      label: id,
-      value
-    }));
-  };
-
-  const processTimelineData = (packets: Packet[]) => {
-    if (!packets || packets.length === 0) {
-      // Return default data structure if no packets
-      return [{
-        id: "traffic",
-        data: [{
-          x: new Date().toISOString().slice(0, 16),
-          y: 0
-        }]
-      }];
-    }
-
-    const timeData = new Map();
-    
-    // Find the time range
-    let minTime = new Date(packets[0].time || Date.now()).getTime();
-    let maxTime = minTime;
-    
-    packets.forEach(packet => {
-      if (!packet.time) return;
-      const timestamp = new Date(packet.time).getTime();
-      minTime = Math.min(minTime, timestamp);
-      maxTime = Math.max(maxTime, timestamp);
-      
-      const minute = new Date(timestamp).toISOString().slice(0, 16);
-      timeData.set(
-        minute, 
-        (timeData.get(minute) || 0) + packet.length
-      );
-    });
-
-    // Ensure we have at least two data points
-    if (timeData.size < 2) {
-      const startTime = new Date(minTime);
-      const endTime = new Date(maxTime + 60000); // Add one minute if only one point
-
-    return [{
-      id: "traffic",
-        data: [
-          {
-            x: startTime.toISOString().slice(0, 16),
-            y: Array.from(timeData.values())[0] || 0
-          },
-          {
-            x: endTime.toISOString().slice(0, 16),
-            y: 0
-          }
-        ]
-      }];
-    }
-
-    return [{
-      id: "traffic",
-      data: Array.from(timeData.entries())
-        .map(([x, y]) => ({
-          x,
-          y
-        }))
-        .sort((a, b) => a.x.localeCompare(b.x))
-    }];
-  };
-
-  const processTopTalkersData = (packets: Packet[]) => {
-    const ipStats = new Map();
-    
-    packets.forEach(packet => {
-      if (!packet.source) return;
-      
-      if (!ipStats.has(packet.source)) {
-        ipStats.set(packet.source, { packets: 0, bytes: 0 });
-      }
-      const stats = ipStats.get(packet.source);
-      stats.packets++;
-      stats.bytes += packet.length;
-    });
-
-    return Array.from(ipStats.entries())
-      .map(([ip, stats]) => ({
-        ip,
-        ...stats
-      }))
-      .sort((a, b) => b.bytes - a.bytes)
-      .slice(0, 10);
-  };
-
-  const processPacketSizeData = (packets: Packet[]) => {
-    const sizeBuckets = {
-      '0-64': 0,
-      '65-128': 0,
-      '129-256': 0,
-      '257-512': 0,
-      '513-1024': 0,
-      '1025+': 0
-    };
-
-    packets.forEach(packet => {
-      const size = packet.length;
-      if (size <= 64) sizeBuckets['0-64']++;
-      else if (size <= 128) sizeBuckets['65-128']++;
-      else if (size <= 256) sizeBuckets['129-256']++;
-      else if (size <= 512) sizeBuckets['257-512']++;
-      else if (size <= 1024) sizeBuckets['513-1024']++;
-      else sizeBuckets['1025+']++;
-    });
-
-    return Object.entries(sizeBuckets).map(([size, count]) => ({
-      size,
-      count
-    }));
-  };
-
-  const renderAnomalyCards = () => {
-    // This is a placeholder - implement actual anomaly detection logic
-    const anomalies = [
-      {
-        title: 'High Retransmission Rate',
-        description: 'TCP retransmission rate above normal threshold',
-        severity: 'warning'
-      },
-      {
-        title: 'Port Scan Detected',
-        description: 'Multiple ports accessed in rapid succession',
-        severity: 'critical'
-      },
-      {
-        title: 'Unusual Protocol',
-        description: 'Detected uncommon protocol usage',
-        severity: 'info'
-      }
-    ];
-
-    return anomalies.map((anomaly, index) => (
-      <div 
-        key={index}
-        className={`p-4 rounded-lg border ${
-          anomaly.severity === 'critical' 
-            ? 'border-red-200 bg-red-50' 
-            : anomaly.severity === 'warning'
-            ? 'border-yellow-200 bg-yellow-50'
-            : 'border-blue-200 bg-blue-50'
-        }`}
-      >
-        <h5 className="font-medium mb-1">{anomaly.title}</h5>
-        <p className="text-sm text-gray-600">{anomaly.description}</p>
-      </div>
-    ));
-  };
-
-  // Add useEffect for auto-scrolling
-  useEffect(() => {
-    if (scrollAreaRef.current) {
-      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]')
-      if (scrollContainer) {
-        const smoothScroll = () => {
-          scrollContainer.scrollTo({
-            top: scrollContainer.scrollHeight,
-            behavior: 'smooth'
-          });
-        };
-        smoothScroll();
-        // Ensure scroll happens after content is rendered
-        setTimeout(smoothScroll, 100);
-      }
-    }
-  }, [messages, isLoading]);
-
   return (
     <div className="flex h-screen relative">
       {error && (
@@ -5866,7 +5535,7 @@ ${chatToSave.map(message => {
           <div className="flex-1 overflow-hidden flex flex-col">
             <ScrollArea ref={scrollAreaRef} className="flex-1 pr-4 overflow-y-auto">
               <div className="space-y-4">
-                {messages.map((message, index) => (
+                {messages.map((message) => (
                   <div
                     key={message.id}
                     className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}

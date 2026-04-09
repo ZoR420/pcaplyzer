@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { ResponsiveNetwork } from '@nivo/network'
-import { formatBytes } from '@/lib/utils'
 
 interface NetworkNode {
   id: string;
@@ -51,34 +50,8 @@ export function NetworkGraph({ data }: NetworkGraphProps) {
       nodeBorderColor={{ from: 'color', modifiers: [['darker', 0.8]] }}
       linkDistance={100}
       centeringStrength={0.3}
-      linkThickness={link => Math.max(1, Math.sqrt(link.traffic || 0))}
+      linkThickness={(link) => Math.max(1, Math.sqrt((link.data.traffic as number) || 0))}
       animate={false}
-      tooltip={({ node, link }: { node?: NetworkNode; link?: NetworkLink }) => {
-        if (node) {
-          return (
-            <div className="bg-white p-2 shadow-lg rounded-md border text-sm">
-              <div className="font-medium">{node.id}</div>
-              <div className="text-gray-600">
-                Packets: {node.packets.toLocaleString()}
-              </div>
-              <div className="text-gray-600">
-                Bytes: {formatBytes(node.bytes)}
-              </div>
-            </div>
-          );
-        }
-        if (link) {
-          return (
-            <div className="bg-white p-2 shadow-lg rounded-md border text-sm">
-              <div>{link.source} → {link.target}</div>
-              <div className="text-gray-600">
-                Traffic: {formatBytes(link.traffic)}
-              </div>
-            </div>
-          );
-        }
-        return null;
-      }}
     />
   );
 } 

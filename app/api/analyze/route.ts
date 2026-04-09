@@ -1,77 +1,47 @@
-import { NextResponse } from 'next/server'
-import { exec } from 'child_process'
-import { promisify } from 'util'
-import path from 'path'
+import { execFile } from 'child_process'
 import fs from 'fs'
+import { promisify } from 'util'
+import { NextResponse } from 'next/server'
 import { enforceApiGuard } from '@/lib/api-guard'
+import { resolveUploadedFilePath } from '@/lib/upload-storage'
 
-const execAsync = promisify(exec)
-
-// Set a larger buffer size for tshark output (default 100MB)
+const execFileAsync = promisify(execFile)
 const maxBufferMb = Number(process.env.TSHARK_MAX_BUFFER_MB || 100)
 const EXEC_OPTIONS = { maxBuffer: maxBufferMb * 1024 * 1024 }
 
-// Check if tshark is available
-async function isTsharkAvailable() {
-  try {
-    // First try the direct command
+function sanitizeErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message.replace(/([A-Za-z]:\\[^\s]+|\/[^\s]+)/g, '[path]')
+  }
+
+  return fallback
+}
+
+function getTsharkCandidates() {
+  return [
+    process.env.TSHARK_PATH,
+    'tshark',
+    'C:\\Program Files\\Wireshark\\tshark.exe',
+    'C:\\Program Files (x86)\\Wireshark\\tshark.exe',
+    process.env.WIRESHARK_PATH
+  ].filter((value): value is string => Boolean(value))
+}
+
+async function runCommand(command: string, args: string[]) {
+  return execFileAsync(command, args, EXEC_OPTIONS)
+}
+
+async function findTsharkExecutable() {
+  for (const candidate of getTsharkCandidates()) {
     try {
-      await execAsync('tshark --version', EXEC_OPTIONS)
-      return true
-    } catch (error) {
-      console.warn('Direct tshark command failed, checking common installation paths...')
+      await runCommand(candidate, ['-v'])
+      return candidate
+    } catch {
+      // try next candidate
     }
-
-    // Check common installation paths on Windows
-    const commonPaths = [
-      'C:\\Program Files\\Wireshark\\tshark.exe',
-      'C:\\Program Files (x86)\\Wireshark\\tshark.exe',
-      process.env.WIRESHARK_PATH // Allow custom path through environment variable
-    ].filter(Boolean) // Remove undefined paths
-
-    for (const path of commonPaths) {
-      try {
-        await execAsync(`"${path}" --version`, EXEC_OPTIONS)
-        console.log(`Found tshark at: ${path}`)
-        // If found, set it as an environment variable for future use
-        process.env.TSHARK_PATH = path
-        return true
-      } catch (error) {
-        console.warn(`Tshark not found at: ${path}`)
-      }
-    }
-
-    // If we get here, tshark was not found
-    console.warn(`
-      Tshark is not installed or not in PATH. 
-      Please install Wireshark from https://www.wireshark.org/download.html
-      
-      Installation tips:
-      1. Windows: Make sure to check "Add Wireshark to the system PATH" during installation
-      2. macOS: Install via 'brew install wireshark'
-      3. Linux: Install via 'sudo apt-get install tshark' or equivalent
-    `)
-    return false
-  } catch (error) {
-    console.error('Error checking for tshark:', error)
-    return false
   }
-}
 
-// Function to get tshark command with proper path
-function getTsharkCommand() {
-  return process.env.TSHARK_PATH ? `"${process.env.TSHARK_PATH}"` : 'tshark'
-}
-
-// Basic file analysis without tshark
-function analyzeFileBasic(filePath: string) {
-  const stats = fs.statSync(filePath)
-  return {
-    file_size: stats.size,
-    created_at: stats.birthtime.toISOString(),
-    modified_at: stats.mtime.toISOString(),
-    access_at: stats.atime.toISOString()
-  }
+  throw new Error('Tshark is not available. Please install Wireshark and ensure tshark is on PATH.')
 }
 
 export async function POST(request: Request) {
@@ -88,88 +58,36 @@ export async function POST(request: Request) {
     }
 
     const { fileName } = await request.json()
-    console.log('Analyze request received for file:', fileName)
-    
-    if (!fileName) {
-      console.log('No filename provided')
+    if (!fileName || typeof fileName !== 'string') {
+      return NextResponse.json({ error: 'No file name provided' }, { status: 400 })
+    }
+
+    const filePath = await resolveUploadedFilePath(fileName)
+
+    try {
+      await fs.promises.access(filePath, fs.constants.R_OK)
+    } catch {
+      return NextResponse.json({ error: 'File not found or not readable' }, { status: 404 })
+    }
+
+    const fileStats = fs.statSync(filePath)
+    const fileSize = fileStats.size
+    const tsharkPath = await findTsharkExecutable()
+
+    try {
+      await runCommand(tsharkPath, ['-r', filePath, '-c', '1'])
+    } catch (error) {
       return NextResponse.json(
-        { error: 'No file name provided' },
+        {
+          error: 'Invalid PCAP file. Please ensure the file is a valid PCAP/PCAPNG file.',
+          details: sanitizeErrorMessage(error, 'Failed to validate capture file')
+        },
         { status: 400 }
       )
     }
 
-    const uploadsDir = path.join(process.cwd(), 'uploads')
-    const filePath = path.join(uploadsDir, fileName)
-    console.log('Looking for file at:', filePath)
-
-    // Check if file exists and is readable
     try {
-      await fs.promises.access(filePath, fs.constants.R_OK)
-      console.log('File exists and is readable')
-    } catch (error) {
-      console.error('File access error:', error)
-      return NextResponse.json(
-        { error: 'File not found or not readable' },
-        { status: 404 }
-      )
-    }
-
-    // Get basic file stats
-    const fileStats = fs.statSync(filePath)
-    const fileSize = fileStats.size
-    console.log('File stats:', { size: fileSize, created: fileStats.birthtime, modified: fileStats.mtime })
-
-    // Check if tshark is available and get its path
-    let tsharkPath = 'tshark'
-    try {
-      // Try common Wireshark installation paths on Windows
-      const commonPaths = [
-        'C:\\Program Files\\Wireshark\\tshark.exe',
-        'C:\\Program Files (x86)\\Wireshark\\tshark.exe',
-        process.env.WIRESHARK_PATH
-      ].filter(Boolean)
-
-      for (const path of commonPaths) {
-        if (path && fs.existsSync(path)) {
-          tsharkPath = `"${path}"`
-          console.log('Found tshark at:', path)
-          break
-        }
-      }
-    } catch (error) {
-      console.error('Error finding tshark:', error)
-    }
-
-    // Test if tshark is working
-    try {
-      const { stdout } = await execAsync(`${tsharkPath} -v`, EXEC_OPTIONS)
-      console.log('Tshark version:', stdout.split('\n')[0])
-    } catch (error) {
-      console.error('Tshark not available:', error)
-      return NextResponse.json({
-        error: 'Tshark is not available. Please install Wireshark.',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }, { status: 500 })
-    }
-
-    // Test if file is a valid PCAP
-    try {
-      const { stdout } = await execAsync(`${tsharkPath} -r "${filePath}" -c 1`, EXEC_OPTIONS)
-      console.log('PCAP validation successful')
-    } catch (error) {
-      console.error('Invalid PCAP file:', error)
-      return NextResponse.json({
-        error: 'Invalid PCAP file. Please ensure the file is a valid PCAP/PCAPNG file.',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }, { status: 400 })
-    }
-
-    // Get packet count and timestamps
-    try {
-      const { stdout: packetInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e frame.time_epoch`,
-        EXEC_OPTIONS
-      )
+      const { stdout: packetInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'frame.time_epoch'])
       const timestamps = packetInfo.split('\n').filter(Boolean).map(Number)
       const packetCount = timestamps.length
 
@@ -187,15 +105,8 @@ export async function POST(request: Request) {
               file_modified: fileStats.mtime.toISOString()
             },
             protocol_counts: {},
-            packet_sizes: {
-              min: 0,
-              max: 0,
-              average: 0
-            },
-            ip_addresses: {
-              source: [],
-              destination: []
-            },
+            packet_sizes: { min: 0, max: 0, average: 0 },
+            ip_addresses: { source: [], destination: [] },
             protocols: [],
             tcp_ports: [],
             udp_ports: [],
@@ -209,78 +120,51 @@ export async function POST(request: Request) {
 
       const firstEpoch = Math.min(...timestamps)
       const lastEpoch = Math.max(...timestamps)
-      
-      console.log('Packet analysis:', {
-        count: packetCount,
-        firstPacket: new Date(firstEpoch * 1000),
-        lastPacket: new Date(lastEpoch * 1000)
-      })
 
-      // Get protocols
-      const { stdout: protocolInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e frame.protocols`,
-        EXEC_OPTIONS
-      )
+      const { stdout: protocolInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'frame.protocols'])
       const protocols = protocolInfo
         .split('\n')
         .filter(Boolean)
-        .flatMap(line => line.split(':'))
-        .filter(protocol => protocol.length > 0)
+        .flatMap((line) => line.split(':'))
+        .filter((protocol) => protocol.length > 0)
 
-      const protocolCounts = protocols.reduce((counts: Record<string, number>, protocol: string) => {
+      const protocolCounts = protocols.reduce<Record<string, number>>((counts, protocol) => {
         counts[protocol] = (counts[protocol] || 0) + 1
         return counts
       }, {})
 
-      // Get IP addresses
-      const { stdout: ipInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e ip.src -e ip.dst`,
-        EXEC_OPTIONS
-      )
+      const { stdout: ipInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'ip.src', '-e', 'ip.dst'])
       const sourceIPs = new Set<string>()
       const destIPs = new Set<string>()
-      
-      ipInfo.split('\n').filter(Boolean).forEach(line => {
+      ipInfo.split('\n').filter(Boolean).forEach((line) => {
         const [src, dst] = line.split('\t')
         if (src) sourceIPs.add(src)
         if (dst) destIPs.add(dst)
       })
 
-      // Get ports
-      const { stdout: tcpInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e tcp.srcport -e tcp.dstport`,
-        EXEC_OPTIONS
-      )
-      const { stdout: udpInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e udp.srcport -e udp.dstport`,
-        EXEC_OPTIONS
-      )
+      const { stdout: tcpInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'tcp.srcport', '-e', 'tcp.dstport'])
+      const { stdout: udpInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'udp.srcport', '-e', 'udp.dstport'])
 
       const tcpPorts = new Set<number>()
       const udpPorts = new Set<number>()
 
-      tcpInfo.split('\n').filter(Boolean).forEach(line => {
-        line.split('\t').forEach(port => {
+      tcpInfo.split('\n').filter(Boolean).forEach((line) => {
+        line.split('\t').forEach((port) => {
           if (port) tcpPorts.add(Number(port))
         })
       })
 
-      udpInfo.split('\n').filter(Boolean).forEach(line => {
-        line.split('\t').forEach(port => {
+      udpInfo.split('\n').filter(Boolean).forEach((line) => {
+        line.split('\t').forEach((port) => {
           if (port) udpPorts.add(Number(port))
         })
       })
 
-      // Get packet details
-      const { stdout: packetDetails } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e frame.number -e frame.time_epoch -e ip.src -e ip.dst -e _ws.col.Protocol -e frame.len -e _ws.col.Info`,
-        EXEC_OPTIONS
-      )
-
+      const { stdout: packetDetails } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'frame.number', '-e', 'frame.time_epoch', '-e', 'ip.src', '-e', 'ip.dst', '-e', '_ws.col.Protocol', '-e', 'frame.len', '-e', '_ws.col.Info'])
       const packets = packetDetails
         .split('\n')
         .filter(Boolean)
-        .map(line => {
+        .map((line) => {
           const [number, timeEpoch, src, dst, protocol, length, info] = line.split('\t')
           return {
             number: Number(number),
@@ -293,42 +177,38 @@ export async function POST(request: Request) {
           }
         })
 
-      // Get DNS queries
-      const { stdout: dnsInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e dns.qry.name -e dns.qry.type -e dns.resp.name -e dns.a -e dns.aaaa -e dns.cname -e dns.txt -Y "dns.flags.response eq 0 or dns.flags.response eq 1"`,
-        EXEC_OPTIONS
-      )
-
+      const { stdout: dnsInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'dns.qry.name', '-e', 'dns.qry.type', '-e', 'dns.resp.name', '-e', 'dns.a', '-e', 'dns.aaaa', '-e', 'dns.cname', '-e', 'dns.txt', '-Y', 'dns.flags.response eq 0 or dns.flags.response eq 1'])
       const dnsQueries = dnsInfo
         .split('\n')
         .filter(Boolean)
-        .map(line => {
-          const [qname, qtype, rname, a, aaaa, cname, txt] = line.split('\t')
+        .map((line) => {
+          const [qname, qtype, , a, aaaa, cname, txt] = line.split('\t')
           return {
             query: qname,
-            type: getDnsType(qtype),
+            type: getDnsType(qtype || ''),
             responses: [a, aaaa, cname, txt].filter(Boolean)
           }
         })
-        .filter(query => query.query)
+        .filter((query) => query.query)
 
-      // Get conversations
-      const { stdout: convInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -q -z conv,ip`,
-        EXEC_OPTIONS
-      )
-
+      const { stdout: convInfo } = await runCommand(tsharkPath, ['-r', filePath, '-q', '-z', 'conv,ip'])
       const conversations = convInfo
         .split('\n')
-        .filter(line => !line.includes('Filter:') && !line.includes('=======') && line.trim() !== '')
-        .map(line => {
-          const parts = line.trim().split(/\s+/);
+        .filter((line) => !line.includes('Filter:') && !line.includes('=======') && line.trim() !== '')
+        .map((line) => {
+          const parts = line.trim().split(/\s+/)
           if (parts.length >= 7) {
-            const [sourceIp, , destinationIp, framesAtoB, framesBtoA, totals, timing] = parts;
-            
-            // Parse frames and bytes
-            const [totalFrames, totalBytes] = totals.split(':').map(Number);
-            const [startTime, duration] = timing.split(':').map(Number);
+            const sourceIp = parts[0]
+            const destinationIp = parts[2]
+            const totals = parts[5]
+            const timing = parts[6]
+
+            if (!sourceIp || !destinationIp || !totals || !timing) {
+              return null
+            }
+
+            const [totalFrames, totalBytes] = totals.split(':').map(Number)
+            const [, duration] = timing.split(':').map(Number)
 
             return {
               sourceIp,
@@ -336,124 +216,98 @@ export async function POST(request: Request) {
               protocol: 'IP',
               packetCount: totalFrames,
               dataVolume: totalBytes,
-              duration: duration,
+              duration,
               hasErrors: false,
               hasRetransmissions: false
-            };
+            }
           }
-          return null;
+          return null
         })
-        .filter(Boolean);
+        .filter(Boolean)
 
-      // Get TCP retransmissions
-      const { stdout: retransInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e ip.src -e ip.dst -Y "tcp.analysis.retransmission"`,
-        EXEC_OPTIONS
-      )
+      const { stdout: retransInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'ip.src', '-e', 'ip.dst', '-Y', 'tcp.analysis.retransmission'])
+      const retransmissions = new Set<string>()
+      retransInfo.split('\n').filter(Boolean).forEach((line) => {
+        const [src, dst] = line.split('\t')
+        if (src && dst) retransmissions.add(`${src}-${dst}`)
+      })
 
-      const retransmissions = new Set();
-      retransInfo.split('\n').filter(Boolean).forEach(line => {
-        const [src, dst] = line.split('\t');
-        if (src && dst) {
-          retransmissions.add(`${src}-${dst}`);
-        }
-      });
-
-      // Mark conversations with retransmissions
-      conversations.forEach(conv => {
+      conversations.forEach((conv) => {
         if (conv && retransmissions.has(`${conv.sourceIp}-${conv.destinationIp}`)) {
-          conv.hasRetransmissions = true;
+          conv.hasRetransmissions = true
         }
-      });
+      })
 
-      // Get TCP flow statistics
-      const { stdout: tcpFlowInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e frame.time_epoch -e ip.src -e ip.dst -e tcp.flags -e tcp.analysis.ack_rtt -e tcp.analysis.retransmission -e frame.len -Y "tcp"`,
-        EXEC_OPTIONS
-      )
+      const { stdout: tcpFlowInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'frame.time_epoch', '-e', 'ip.src', '-e', 'ip.dst', '-e', 'tcp.flags', '-e', 'tcp.analysis.ack_rtt', '-e', 'tcp.analysis.retransmission', '-e', 'frame.len', '-Y', 'tcp'])
+      const tcpFlows = new Map<string, {
+        sourceIp: string
+        destinationIp: string
+        protocol: string
+        handshakeStatus: { syn: string; synAck: string; ack: string }
+        rttStats: { min: number; max: number; total: number; count: number }
+        retransmissionCount: number
+        rstCount: number
+        totalBytes: number
+        startTime: number
+        endTime: number
+      }>()
 
-      const tcpFlows = new Map();
-      tcpFlowInfo.split('\n').filter(Boolean).forEach(line => {
-        const [timeEpoch, src, dst, flags, rtt, retrans, len] = line.split('\t');
-        const key = `${src}-${dst}`;
-        
+      tcpFlowInfo.split('\n').filter(Boolean).forEach((line) => {
+        const [timeEpoch, src, dst, flags, rtt, retrans, len] = line.split('\t')
+        if (!timeEpoch || !src || !dst) {
+          return
+        }
+        const key = `${src}-${dst}`
+
         if (!tcpFlows.has(key)) {
           tcpFlows.set(key, {
             sourceIp: src,
             destinationIp: dst,
             protocol: 'TCP',
-            handshakeStatus: {
-              syn: 'X',
-              synAck: 'X',
-              ack: 'X'
-            },
-            rttStats: {
-              min: Number.MAX_VALUE,
-              max: 0,
-              total: 0,
-              count: 0
-            },
+            handshakeStatus: { syn: 'X', synAck: 'X', ack: 'X' },
+            rttStats: { min: Number.MAX_VALUE, max: 0, total: 0, count: 0 },
             retransmissionCount: 0,
             rstCount: 0,
             totalBytes: 0,
             startTime: parseFloat(timeEpoch),
             endTime: parseFloat(timeEpoch)
-          });
+          })
         }
 
-        const flow = tcpFlows.get(key);
-        flow.totalBytes += parseInt(len) || 0;
-        flow.endTime = parseFloat(timeEpoch);
+        const flow = tcpFlows.get(key)
+        if (!flow) return
 
-        // Update handshake status
+        flow.totalBytes += parseInt(len || '0', 10) || 0
+        flow.endTime = parseFloat(timeEpoch)
+
         if (flags) {
-          // SYN flag (0x02)
-          if (flags.includes('0x002')) {
-            flow.handshakeStatus.syn = 'SYN';
-          }
-          
-          // SYN-ACK flag (0x12)
-          if (flags.includes('0x012')) {
-            flow.handshakeStatus.synAck = 'SYN-ACK';
-          }
-          
-          // ACK flag (0x10)
-          if (flags.includes('0x010')) {
-            flow.handshakeStatus.ack = 'ACK';
-          }
-          
-          // RST flag (0x04)
-          if (flags.includes('0x004')) {
-            flow.rstCount++;
-          }
+          if (flags.includes('0x002')) flow.handshakeStatus.syn = 'SYN'
+          if (flags.includes('0x012')) flow.handshakeStatus.synAck = 'SYN-ACK'
+          if (flags.includes('0x010')) flow.handshakeStatus.ack = 'ACK'
+          if (flags.includes('0x004')) flow.rstCount += 1
         }
 
-        // Update RTT stats
-        if (rtt && !isNaN(parseFloat(rtt))) {
-          const rttValue = parseFloat(rtt) * 1000; // Convert to milliseconds
-          flow.rttStats.min = Math.min(flow.rttStats.min, rttValue);
-          flow.rttStats.max = Math.max(flow.rttStats.max, rttValue);
-          flow.rttStats.total += rttValue;
-          flow.rttStats.count++;
+        if (rtt && !Number.isNaN(parseFloat(rtt))) {
+          const rttValue = parseFloat(rtt) * 1000
+          flow.rttStats.min = Math.min(flow.rttStats.min, rttValue)
+          flow.rttStats.max = Math.max(flow.rttStats.max, rttValue)
+          flow.rttStats.total += rttValue
+          flow.rttStats.count += 1
         }
 
-        // Count retransmissions
-        if (retrans) {
-          flow.retransmissionCount++;
+        if (retrans) flow.retransmissionCount += 1
+      })
+
+      const { stdout: udpFlowInfo } = await runCommand(tsharkPath, ['-r', filePath, '-T', 'fields', '-e', 'frame.time_epoch', '-e', 'ip.src', '-e', 'ip.dst', '-e', 'frame.len', '-Y', 'udp'])
+      const udpFlows = new Map<string, { sourceIp: string; destinationIp: string; protocol: string; totalBytes: number; startTime: number; endTime: number }>()
+
+      udpFlowInfo.split('\n').filter(Boolean).forEach((line) => {
+        const [timeEpoch, src, dst, len] = line.split('\t')
+        if (!timeEpoch || !src || !dst) {
+          return
         }
-      });
+        const key = `${src}-${dst}`
 
-      // Get UDP flow statistics
-      const { stdout: udpFlowInfo } = await execAsync(
-        `${tsharkPath} -r "${filePath}" -T fields -e frame.time_epoch -e ip.src -e ip.dst -e frame.len -Y "udp"`,
-        EXEC_OPTIONS
-      )
-
-      const udpFlows = new Map();
-      udpFlowInfo.split('\n').filter(Boolean).forEach(line => {
-        const [timeEpoch, src, dst, len] = line.split('\t');
-        const key = `${src}-${dst}`;
-        
         if (!udpFlows.has(key)) {
           udpFlows.set(key, {
             sourceIp: src,
@@ -462,44 +316,46 @@ export async function POST(request: Request) {
             totalBytes: 0,
             startTime: parseFloat(timeEpoch),
             endTime: parseFloat(timeEpoch)
-          });
+          })
         }
 
-        const flow = udpFlows.get(key);
-        flow.totalBytes += parseInt(len) || 0;
-        flow.endTime = parseFloat(timeEpoch);
-      });
+        const flow = udpFlows.get(key)
+        if (!flow) return
+        flow.totalBytes += parseInt(len || '0', 10) || 0
+        flow.endTime = parseFloat(timeEpoch)
+      })
 
-      // Process flow statistics
       const flowStats = [
-        ...Array.from(tcpFlows.values()).map(flow => {
-          const duration = flow.endTime - flow.startTime;
+        ...Array.from(tcpFlows.values()).map((flow) => {
+          const duration = flow.endTime - flow.startTime
           return {
             ...flow,
-            rttStats: flow.rttStats.count > 0 ? {
-              min: Number(flow.rttStats.min.toFixed(2)),
-              max: Number(flow.rttStats.max.toFixed(2)),
-              average: Number((flow.rttStats.total / flow.rttStats.count).toFixed(2))
-            } : null,
+            rttStats: flow.rttStats.count > 0
+              ? {
+                  min: Number(flow.rttStats.min.toFixed(2)),
+                  max: Number(flow.rttStats.max.toFixed(2)),
+                  average: Number((flow.rttStats.total / flow.rttStats.count).toFixed(2))
+                }
+              : null,
             throughput: duration > 0 ? flow.totalBytes / duration : 0
-          };
+          }
         }),
-        ...Array.from(udpFlows.values()).map(flow => {
-          const duration = flow.endTime - flow.startTime;
+        ...Array.from(udpFlows.values()).map((flow) => {
+          const duration = flow.endTime - flow.startTime
           return {
             ...flow,
             rttStats: null,
             handshakeStatus: null,
             retransmissionCount: 0,
             throughput: duration > 0 ? flow.totalBytes / duration : 0
-          };
+          }
         })
-      ];
+      ]
 
-      const results = {
+      return NextResponse.json({
         trafficSummary: {
           file_size: fileSize,
-          total_bytes: packets.reduce((sum, p) => sum + p.length, 0),
+          total_bytes: packets.reduce((sum, packet) => sum + packet.length, 0),
           packet_count: packetCount,
           time_range: {
             start: new Date(firstEpoch * 1000).toISOString(),
@@ -510,9 +366,9 @@ export async function POST(request: Request) {
           },
           protocol_counts: protocolCounts,
           packet_sizes: {
-            min: Math.min(...packets.map(p => p.length)),
-            max: Math.max(...packets.map(p => p.length)),
-            average: packets.reduce((sum, p) => sum + p.length, 0) / packets.length
+            min: Math.min(...packets.map((packet) => packet.length)),
+            max: Math.max(...packets.map((packet) => packet.length)),
+            average: packets.reduce((sum, packet) => sum + packet.length, 0) / packets.length
           },
           ip_addresses: {
             source: Array.from(sourceIPs),
@@ -522,32 +378,33 @@ export async function POST(request: Request) {
           tcp_ports: Array.from(tcpPorts),
           udp_ports: Array.from(udpPorts),
           dns_queries: dnsQueries,
-          packets: packets,
-          conversations: conversations,
-          flowStats: flowStats,
+          packets,
+          conversations,
+          flowStats
         }
-      }
-
-      console.log('Analysis completed successfully')
-      return NextResponse.json(results)
-
+      })
     } catch (error) {
       console.error('Analysis error:', error)
-      return NextResponse.json({
-        error: 'Failed to analyze the PCAP file',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }, { status: 500 })
+      return NextResponse.json(
+        {
+          error: 'Failed to analyze the PCAP file',
+          details: sanitizeErrorMessage(error, 'Analysis failed')
+        },
+        { status: 500 }
+      )
     }
   } catch (error) {
     console.error('Request handling error:', error)
-    return NextResponse.json({
-      error: 'Failed to process the request',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 })
+    return NextResponse.json(
+      {
+        error: 'Failed to process the request',
+        details: sanitizeErrorMessage(error, 'Request failed')
+      },
+      { status: 500 }
+    )
   }
 }
 
-// Helper function to get DNS record type names
 function getDnsType(type: string): string {
   const dnsTypes: Record<string, string> = {
     '1': 'A',
@@ -570,7 +427,7 @@ function getDnsType(type: string): string {
     '52': 'TLSA',
     '99': 'SPF',
     '255': 'ANY'
-  };
-  
-  return dnsTypes[type] || `TYPE${type}`;
-} 
+  }
+
+  return dnsTypes[type] || `TYPE${type}`
+}
