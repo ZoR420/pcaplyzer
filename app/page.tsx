@@ -15,6 +15,7 @@ import { ChevronUpIcon } from 'lucide-react'
 import { PieTooltipProps } from '@nivo/pie';
 import { BarTooltipProps } from '@nivo/bar';
 import dynamic from 'next/dynamic'
+import { CaseManager } from '@/app/components/case/case-manager'
 
 // Add this near the top of your file with other imports
 const NetworkGraphNoSSR = dynamic(
@@ -5528,6 +5529,8 @@ ${chatToSave.map(message => {
             )}
           </Button>
         </Card>
+
+        <CaseManager />
 
         {/* Chat Section */}
         <Card className="p-4 flex-1 flex flex-col h-0">
