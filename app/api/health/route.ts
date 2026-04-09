@@ -1,32 +1,24 @@
 import { NextResponse } from 'next/server'
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import fs from 'fs'
 import path from 'path'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
-async function checkCommand(command: string) {
+async function getDependencyWarnings() {
   try {
-    await execAsync(command)
-    return true
+    const { stdout } = await execFileAsync('node', ['scripts/check-deps.js'], { cwd: process.cwd() })
+    const results = JSON.parse(stdout) as Array<{ name: string; found: boolean }>
+    return results.filter((item) => !item.found).map((item) => `${item.name} not detected`)
   } catch {
-    return false
+    return ['dependency check unavailable']
   }
 }
 
 export async function GET() {
   const warnings: string[] = []
-
-  const tsharkAvailable = await checkCommand('tshark --version')
-  if (!tsharkAvailable) {
-    warnings.push('tshark not found. Install Wireshark/tshark to enable analysis.')
-  }
-
-  const pythonAvailable = await checkCommand('python3 --version') || await checkCommand('python --version')
-  if (!pythonAvailable) {
-    warnings.push('Python not found. Install Python 3 to enable chat analysis.')
-  }
+  warnings.push(...await getDependencyWarnings())
 
   const uploadsDir = path.join(process.cwd(), 'uploads')
   try {
