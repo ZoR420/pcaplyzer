@@ -13,6 +13,13 @@ type CaseArtifact = {
   createdAt: string
 }
 
+type ScapSummary = {
+  processTree: Array<{ pid: string; name: string }>
+  networkActivity: Array<{ protocol?: string; source?: string; destination?: string }>
+  fileActivity: Array<{ operation?: string; path?: string }>
+  notes: string[]
+}
+
 type CaseRecord = {
   id: string
   title: string
@@ -36,6 +43,7 @@ export function CaseManager() {
   const [newCaseTitle, setNewCaseTitle] = useState('')
   const [status, setStatus] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [scapSummaries, setScapSummaries] = useState<Record<string, ScapSummary>>({})
 
   const selectedCase = cases.find((entry) => entry.id === selectedCaseId) || null
 
@@ -70,6 +78,27 @@ export function CaseManager() {
       setStatus(`Created case ${data.case.title}`)
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Failed to create case')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+
+  async function generateScapArtifactSummary(artifactId: string) {
+    if (!selectedCaseId) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch(`/api/cases/${selectedCaseId}/artifacts/${artifactId}/scap-summary`, {
+        method: 'POST'
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to generate SCAP summary')
+      setScapSummaries((prev) => ({ ...prev, [artifactId]: data.summary }))
+      setStatus('Generated SCAP summary')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to generate SCAP summary')
     } finally {
       setLoading(false)
     }
@@ -155,10 +184,33 @@ export function CaseManager() {
               <div className="space-y-2">
                 {selectedCase.artifacts.map((artifact) => (
                   <div key={artifact.id} className="rounded-md border bg-gray-50 px-3 py-2 text-sm">
-                    <div className="font-medium">{artifact.originalName}</div>
-                    <div className="text-xs text-gray-500">
-                      {artifact.kind.toUpperCase()} · {formatBytes(artifact.sizeBytes)} · {new Date(artifact.createdAt).toLocaleString()}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium">{artifact.originalName}</div>
+                        <div className="text-xs text-gray-500">
+                          {artifact.kind.toUpperCase()} · {formatBytes(artifact.sizeBytes)} · {new Date(artifact.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                      {artifact.kind === 'scap' ? (
+                        <Button type="button" variant="outline" onClick={() => generateScapArtifactSummary(artifact.id)} disabled={loading}>
+                          Generate summary
+                        </Button>
+                      ) : null}
                     </div>
+                    {artifact.kind === 'scap' && scapSummaries[artifact.id] ? (() => {
+                      const summary = scapSummaries[artifact.id]
+                      if (!summary) return null
+                      return (
+                        <div className="mt-3 rounded border bg-white p-3 text-xs text-gray-700">
+                          <div>Processes: {summary.processTree.length}</div>
+                          <div>Network events: {summary.networkActivity.length}</div>
+                          <div>File events: {summary.fileActivity.length}</div>
+                          {summary.notes.length ? (
+                            <div className="mt-2 text-amber-700">{summary.notes.join(' ')}</div>
+                          ) : null}
+                        </div>
+                      )
+                    })() : null}
                   </div>
                 ))}
                 {selectedCase.artifacts.length === 0 ? <div className="text-sm text-gray-500">No artifacts in this case yet.</div> : null}
