@@ -71,12 +71,34 @@ type CaseFindings = {
       category: 'network' | 'file' | 'process' | 'behavior'
       summary: string
       iocs: string[]
+      attackTags: string[]
+      suppressed?: boolean
+    }>
+    activeFindings: Array<{
+      id: string
+      title: string
+      severity: 'low' | 'medium' | 'high'
+      category: 'network' | 'file' | 'process' | 'behavior'
+      summary: string
+      iocs: string[]
+      attackTags: string[]
+      suppressed?: boolean
     }>
     iocs: string[]
     score: number
     severity: 'low' | 'medium' | 'high'
     generatedAt: string
   }
+}
+
+type SavedRule = {
+  id: string
+  name: string
+  pattern: string
+  category: 'network' | 'file' | 'process' | 'behavior'
+  severity: 'low' | 'medium' | 'high'
+  enabled: boolean
+  createdAt: string
 }
 
 type CaseRecord = {
@@ -109,6 +131,9 @@ export function CaseManager() {
   const [noteDraft, setNoteDraft] = useState('')
   const [reportPreview, setReportPreview] = useState<CaseReport | null>(null)
   const [findingsPreview, setFindingsPreview] = useState<CaseFindings | null>(null)
+  const [savedRules, setSavedRules] = useState<SavedRule[]>([])
+  const [ruleName, setRuleName] = useState('')
+  const [rulePattern, setRulePattern] = useState('')
 
   const selectedCase = cases.find((entry) => entry.id === selectedCaseId) || null
 
@@ -184,6 +209,44 @@ export function CaseManager() {
     }
   }
 
+
+
+  async function loadSavedRules() {
+    const response = await fetch('/api/rules')
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'Failed to load rules')
+    setSavedRules(data.rules || [])
+  }
+
+  async function saveRule() {
+    if (!ruleName.trim() || !rulePattern.trim()) return
+
+    setLoading(true)
+    setStatus(null)
+    try {
+      const response = await fetch('/api/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: ruleName,
+          pattern: rulePattern,
+          category: 'behavior',
+          severity: 'medium',
+          enabled: true
+        })
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Failed to save rule')
+      setRuleName('')
+      setRulePattern('')
+      await loadSavedRules()
+      setStatus('Saved rule added')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to save rule')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function loadCaseFindings() {
     if (!selectedCaseId) return
@@ -384,6 +447,29 @@ export function CaseManager() {
                           Generate summary
                         </Button>
                       ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Saved detection rules</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
+                      <input value={rulePattern} onChange={(event) => setRulePattern(event.target.value)} placeholder="Match pattern" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveRule} disabled={loading || !ruleName.trim() || !rulePattern.trim()}>
+                        Save rule
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {savedRules.length === 0 ? <div className="text-gray-500">No saved rules yet.</div> : savedRules.map((rule) => (
+                        <div key={rule.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{rule.name}</div>
+                          <div>{rule.pattern}</div>
+                          <div className="text-[11px] text-gray-500">{rule.severity.toUpperCase()} • {rule.category}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {selectedCaseId ? (
+                      <a href={`/api/cases/${selectedCaseId}/iocs`} className="mt-3 inline-block text-blue-600 underline">Export IOCs (.txt)</a>
+                    ) : null}
+                  </div>
                     </div>
                     {artifact.kind === 'scap' && scapSummaries[artifact.id] ? (() => {
                       const summary = scapSummaries[artifact.id]
@@ -397,6 +483,29 @@ export function CaseManager() {
                           {summary.notes.length ? (
                             <div className="mt-2 text-amber-700">{summary.notes.join(' ')}</div>
                           ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Saved detection rules</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
+                      <input value={rulePattern} onChange={(event) => setRulePattern(event.target.value)} placeholder="Match pattern" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveRule} disabled={loading || !ruleName.trim() || !rulePattern.trim()}>
+                        Save rule
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {savedRules.length === 0 ? <div className="text-gray-500">No saved rules yet.</div> : savedRules.map((rule) => (
+                        <div key={rule.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{rule.name}</div>
+                          <div>{rule.pattern}</div>
+                          <div className="text-[11px] text-gray-500">{rule.severity.toUpperCase()} • {rule.category}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {selectedCaseId ? (
+                      <a href={`/api/cases/${selectedCaseId}/iocs`} className="mt-3 inline-block text-blue-600 underline">Export IOCs (.txt)</a>
+                    ) : null}
+                  </div>
                         </div>
                       )
                     })() : null}
@@ -439,6 +548,29 @@ export function CaseManager() {
                     </div>
                   ) : null}
 
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Saved detection rules</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
+                      <input value={rulePattern} onChange={(event) => setRulePattern(event.target.value)} placeholder="Match pattern" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveRule} disabled={loading || !ruleName.trim() || !rulePattern.trim()}>
+                        Save rule
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {savedRules.length === 0 ? <div className="text-gray-500">No saved rules yet.</div> : savedRules.map((rule) => (
+                        <div key={rule.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{rule.name}</div>
+                          <div>{rule.pattern}</div>
+                          <div className="text-[11px] text-gray-500">{rule.severity.toUpperCase()} • {rule.category}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {selectedCaseId ? (
+                      <a href={`/api/cases/${selectedCaseId}/iocs`} className="mt-3 inline-block text-blue-600 underline">Export IOCs (.txt)</a>
+                    ) : null}
+                  </div>
+
                   {correlation ? (
                     <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                       <div className="font-medium">Guided triage</div>
@@ -459,6 +591,29 @@ export function CaseManager() {
                       </div>
                     </div>
                   ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Saved detection rules</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
+                      <input value={rulePattern} onChange={(event) => setRulePattern(event.target.value)} placeholder="Match pattern" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveRule} disabled={loading || !ruleName.trim() || !rulePattern.trim()}>
+                        Save rule
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {savedRules.length === 0 ? <div className="text-gray-500">No saved rules yet.</div> : savedRules.map((rule) => (
+                        <div key={rule.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{rule.name}</div>
+                          <div>{rule.pattern}</div>
+                          <div className="text-[11px] text-gray-500">{rule.severity.toUpperCase()} • {rule.category}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {selectedCaseId ? (
+                      <a href={`/api/cases/${selectedCaseId}/iocs`} className="mt-3 inline-block text-blue-600 underline">Export IOCs (.txt)</a>
+                    ) : null}
+                  </div>
 
                   <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                     <div className="font-medium">Case notes</div>
@@ -492,23 +647,70 @@ export function CaseManager() {
                     </div>
                   ) : null}
 
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Saved detection rules</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
+                      <input value={rulePattern} onChange={(event) => setRulePattern(event.target.value)} placeholder="Match pattern" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveRule} disabled={loading || !ruleName.trim() || !rulePattern.trim()}>
+                        Save rule
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {savedRules.length === 0 ? <div className="text-gray-500">No saved rules yet.</div> : savedRules.map((rule) => (
+                        <div key={rule.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{rule.name}</div>
+                          <div>{rule.pattern}</div>
+                          <div className="text-[11px] text-gray-500">{rule.severity.toUpperCase()} • {rule.category}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {selectedCaseId ? (
+                      <a href={`/api/cases/${selectedCaseId}/iocs`} className="mt-3 inline-block text-blue-600 underline">Export IOCs (.txt)</a>
+                    ) : null}
+                  </div>
+
                   {findingsPreview ? (
                     <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
                       <div className="font-medium">Findings summary</div>
                       <div>Severity: {findingsPreview.findings.severity.toUpperCase()}</div>
                       <div>Score: {findingsPreview.findings.score}</div>
                       <div>IOCs: {findingsPreview.findings.iocs.length}</div>
+                      <div>Active findings: {findingsPreview.findings.activeFindings.length}</div>
                       <div className="mt-2 space-y-2">
                         {findingsPreview.findings.findings.map((finding) => (
                           <div key={finding.id} className="rounded border bg-white p-2">
                             <div className="font-medium">{finding.title}</div>
                             <div>{finding.summary}</div>
-                            <div className="text-[11px] text-gray-500">{finding.severity.toUpperCase()} • {finding.category}</div>
+                            <div className="text-[11px] text-gray-500">{finding.severity.toUpperCase()} • {finding.category} • {finding.attackTags.join(', ') || 'No ATT&CK tag'}{finding.suppressed ? ' • suppressed' : ''}</div>
                           </div>
                         ))}
                       </div>
                     </div>
                   ) : null}
+
+                  <div className="mt-4 rounded border bg-gray-50 p-3 text-xs text-gray-700">
+                    <div className="font-medium">Saved detection rules</div>
+                    <div className="mt-2 space-y-2">
+                      <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name" className="w-full rounded border p-2 text-sm" />
+                      <input value={rulePattern} onChange={(event) => setRulePattern(event.target.value)} placeholder="Match pattern" className="w-full rounded border p-2 text-sm" />
+                      <Button type="button" variant="outline" onClick={saveRule} disabled={loading || !ruleName.trim() || !rulePattern.trim()}>
+                        Save rule
+                      </Button>
+                    </div>
+                    <div className="mt-3 max-h-32 space-y-2 overflow-auto">
+                      {savedRules.length === 0 ? <div className="text-gray-500">No saved rules yet.</div> : savedRules.map((rule) => (
+                        <div key={rule.id} className="rounded border bg-white p-2">
+                          <div className="font-medium">{rule.name}</div>
+                          <div>{rule.pattern}</div>
+                          <div className="text-[11px] text-gray-500">{rule.severity.toUpperCase()} • {rule.category}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {selectedCaseId ? (
+                      <a href={`/api/cases/${selectedCaseId}/iocs`} className="mt-3 inline-block text-blue-600 underline">Export IOCs (.txt)</a>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </>
